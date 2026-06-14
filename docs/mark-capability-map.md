@@ -85,10 +85,30 @@ They are not the Mark; they consume it.
 - This map is updated as layers land, so "what the Mark still needs" is always
   visible rather than living in someone's head.
 
+## Known deferrals (layer 0)
+
+These are **conscious decisions**, not undiscovered bugs. They are correct to
+defer at the kernel stage; recorded here so they surface on purpose when their
+layer arrives, not as a late surprise.
+
+- **Snapshots.** `load` and `append` fold an object's whole history every time
+  (append re-folds to compute the next version). At ~10k events per object this
+  is the classic event-sourcing cliff. ADR-0001 anticipates snapshots as a
+  *cache* derived from events; introduce them when the pain is real (around
+  Layer 2/3), never before — and never as a second source of truth.
+- **Numbered migrations.** A single idempotent `migrate()` is enough today. An
+  evolving schema needs ordered, versioned migrations — lands with Layer 1
+  (event versioning) or the first schema change, whichever comes first.
+- **Postgres in CI.** `describe.skipIf(!url)` means that without
+  `MARROW_TEST_DATABASE_URL` the most intricate path (`PostgresMark`) does not
+  run. CI must provide a Postgres service container, or the riskiest layer goes
+  untested there. To wire up with the first CI pipeline.
+
 ## Status
 
-- **Layer 0 — done.** The Spine kernel: 25 tests (16 unit, 9 Postgres
+- **Layer 0 — done.** The Spine kernel: 31 tests (21 unit, 10 Postgres
   integration); `load == replay(read)` proven on both the in-memory and
-  PostgreSQL adapters. Merged in PR #1.
+  PostgreSQL adapters. Kernel merged in PR #1; review hardening (type/schema
+  drift guard, audit-envelope validation) in PR #2.
 - **Layer 1 — next.** Envelope enrichment (correlation/causation ids,
   idempotency, event versioning). To be proposed as ADR-0003.
