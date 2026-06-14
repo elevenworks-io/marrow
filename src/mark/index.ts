@@ -9,6 +9,11 @@
 
 export type { Json, MarkEvent, MarkEventType, EventMetadata, RecordedEvent } from "./event.js";
 export { type ObjectState, applyEvent, replay, ReplayError } from "./projection.js";
-export { markEventSchema, parseMarkEvent } from "./event-schema.js";
+export {
+  markEventSchema,
+  parseMarkEvent,
+  eventMetadataSchema,
+  parseEventMetadata,
+} from "./event-schema.js";
 export { type Mark, type AppendOptions, InMemoryMark, ConcurrencyError } from "./log.js";
 export { PostgresMark, migrate, MARK_EVENTS_TABLE } from "./postgres.js";
