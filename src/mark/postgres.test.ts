@@ -104,7 +104,7 @@ describe.skipIf(!url)("PostgresMark", () => {
     ).rejects.toThrow(ReplayError);
   });
 
-  it("is append-only at the database: UPDATE and DELETE are rejected by a trigger", async () => {
+  it("is append-only at the database: UPDATE, DELETE and TRUNCATE are rejected by a trigger", async () => {
     await mark.append("obj-1", { type: "ObjectCreated", id: "obj-1", objectType: "ticket" });
 
     await expect(
@@ -113,5 +113,22 @@ describe.skipIf(!url)("PostgresMark", () => {
     await expect(
       pool.query(`DELETE FROM ${MARK_EVENTS_TABLE}`),
     ).rejects.toThrow(/append-only/i);
+    await expect(
+      pool.query(`TRUNCATE ${MARK_EVENTS_TABLE}`),
+    ).rejects.toThrow(/append-only/i);
+  });
+
+  it("rejects a stored event whose payload does not match its type (schema drift)", async () => {
+    // A malformed row written straight to the table — a raw INSERT is allowed
+    // (only UPDATE/DELETE/TRUNCATE are blocked); this simulates schema drift or
+    // a buggy writer. An ObjectCreated payload is missing its required `id`.
+    await pool.query(
+      `INSERT INTO ${MARK_EVENTS_TABLE} (object_id, seq, type, payload, metadata, occurred_at)
+       VALUES ($1, 1, 'ObjectCreated', $2, $3, now())`,
+      ["drift-1", { objectType: "ticket" }, { actor: "system" }],
+    );
+
+    await expect(mark.read("drift-1")).rejects.toThrow();
+    await expect(mark.load("drift-1")).rejects.toThrow();
   });
 });

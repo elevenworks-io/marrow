@@ -58,25 +58,25 @@ export function applyEvent(state: ObjectState | null, event: MarkEvent): ObjectS
     throw new ReplayError(`"${event.type}" applied before the object was created`);
   }
 
-  const next = { ...state, version: state.version + 1 };
-
+  // Each arm returns a complete, frozen state literal: no projection can ever
+  // leave this function mutable, and the compiler checks the union is total.
+  const version = state.version + 1;
   switch (event.type) {
     case "AttributeSet":
-      next.attributes = Object.freeze({ ...state.attributes, [event.key]: event.value });
-      break;
+      return Object.freeze({
+        ...state,
+        attributes: Object.freeze({ ...state.attributes, [event.key]: event.value }),
+        version,
+      });
     case "StateChanged":
-      next.state = event.state;
-      break;
+      return Object.freeze({ ...state, state: event.state, version });
     case "NoteAdded":
-      next.notes = Object.freeze([...state.notes, event.text]);
-      break;
+      return Object.freeze({ ...state, notes: Object.freeze([...state.notes, event.text]), version });
     default: {
       const unreachable: never = event;
       throw new ReplayError(`unknown event type: ${JSON.stringify(unreachable)}`);
     }
   }
-
-  return Object.freeze(next);
 }
 
 /**

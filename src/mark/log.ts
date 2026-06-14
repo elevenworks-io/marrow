@@ -92,10 +92,14 @@ export class InMemoryMark implements Mark {
       recordedAt: new Date().toISOString(),
     });
 
-    if (existing.length === 0) {
-      this.#byObject.set(objectId, existing);
+    // Distinguish "map had no entry" from "object has no events" — never use
+    // array length as a presence proxy.
+    let stored = this.#byObject.get(objectId);
+    if (stored === undefined) {
+      stored = [];
+      this.#byObject.set(objectId, stored);
     }
-    existing.push(recorded);
+    stored.push(recorded);
     return recorded;
   }
 

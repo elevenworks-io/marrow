@@ -18,6 +18,7 @@ import type { Pool, PoolClient } from "pg";
 import type { EventMetadata, Json, MarkEvent, RecordedEvent } from "./event.js";
 import { applyEvent, replay, type ObjectState } from "./projection.js";
 import { ConcurrencyError, type AppendOptions, type Mark } from "./log.js";
+import { parseMarkEvent } from "./event-schema.js";
 
 export const MARK_EVENTS_TABLE = "mark_events";
 
@@ -38,22 +39,32 @@ export async function migrate(pool: Pool): Promise<void> {
       UNIQUE (object_id, seq)
     );
 
-    CREATE OR REPLACE FUNCTION ${MARK_EVENTS_TABLE}_append_only()
+    -- Row-level guard for UPDATE/DELETE. References only TG_OP, never NEW/OLD.
+    CREATE OR REPLACE FUNCTION ${MARK_EVENTS_TABLE}_no_mutate_fn()
       RETURNS trigger AS $$
       BEGIN
         RAISE EXCEPTION 'the Mark is append-only: % on ${MARK_EVENTS_TABLE} is forbidden', TG_OP;
       END;
     $$ LANGUAGE plpgsql;
 
+    -- Separate statement-level guard for TRUNCATE: a statement-level trigger has
+    -- no NEW/OLD, so keeping its function distinct avoids a future footgun.
+    CREATE OR REPLACE FUNCTION ${MARK_EVENTS_TABLE}_no_truncate_fn()
+      RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'the Mark is append-only: TRUNCATE on ${MARK_EVENTS_TABLE} is forbidden';
+      END;
+    $$ LANGUAGE plpgsql;
+
     DROP TRIGGER IF EXISTS ${MARK_EVENTS_TABLE}_no_mutate ON ${MARK_EVENTS_TABLE};
     CREATE TRIGGER ${MARK_EVENTS_TABLE}_no_mutate
       BEFORE UPDATE OR DELETE ON ${MARK_EVENTS_TABLE}
-      FOR EACH ROW EXECUTE FUNCTION ${MARK_EVENTS_TABLE}_append_only();
+      FOR EACH ROW EXECUTE FUNCTION ${MARK_EVENTS_TABLE}_no_mutate_fn();
 
     DROP TRIGGER IF EXISTS ${MARK_EVENTS_TABLE}_no_truncate ON ${MARK_EVENTS_TABLE};
     CREATE TRIGGER ${MARK_EVENTS_TABLE}_no_truncate
       BEFORE TRUNCATE ON ${MARK_EVENTS_TABLE}
-      FOR EACH STATEMENT EXECUTE FUNCTION ${MARK_EVENTS_TABLE}_append_only();
+      FOR EACH STATEMENT EXECUTE FUNCTION ${MARK_EVENTS_TABLE}_no_truncate_fn();
   `);
 }
 
@@ -68,25 +79,17 @@ interface EventRow {
   recorded_at: Date;
 }
 
-const KNOWN_TYPES = new Set<MarkEvent["type"]>([
-  "ObjectCreated",
-  "AttributeSet",
-  "StateChanged",
-  "NoteAdded",
-]);
-
 /** Split a domain event into its discriminant and the rest (the JSONB payload). */
 function toPayload(event: MarkEvent): Record<string, Json> {
   const { type: _type, ...payload } = event;
   return payload as Record<string, Json>;
 }
 
-/** Reconstruct a domain event from a stored row, guarding against schema drift. */
+/** Reconstruct a domain event from a stored row, validated against the schema. */
 function fromRow(type: string, payload: Record<string, Json>): MarkEvent {
-  if (!KNOWN_TYPES.has(type as MarkEvent["type"])) {
-    throw new Error(`unknown event type read from the Mark: ${type}`);
-  }
-  return { type, ...payload } as MarkEvent;
+  // Validate the full event at this trust boundary: a malformed payload (schema
+  // drift, a direct SQL write) must be rejected, never folded into state.
+  return parseMarkEvent({ type, ...payload });
 }
 
 function toRecorded(row: EventRow): RecordedEvent {
@@ -116,8 +119,14 @@ export class PostgresMark implements Mark {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      // Serialise appends per object so the read-validate-insert is atomic.
-      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [objectId]);
+      // Serialise appends per object so the read-validate-insert is atomic. The
+      // two-argument form gives a 64-bit lock key (two distinct 32-bit hashes),
+      // making cross-object collisions — and the spurious serialisation they
+      // cause — negligible. UNIQUE(object_id, seq) remains the hard backstop.
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtext($1), hashtext('marrow:' || $1))",
+        [objectId],
+      );
 
       const current = await this.#loadWithin(client, objectId);
       const currentVersion = current?.version ?? 0;
