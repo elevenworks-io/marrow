@@ -20,6 +20,8 @@ MARROW is built on **the Mark**: an append-only event log that is the single sou
 - **MCP both directions.** MARROW consumes external tools as MCP and exposes its own objects/actions as an MCP server. Don’t build closed, one-off integrations where a standard tool interface belongs.
 - **One substrate, not ten apps.** New domains come from reconfiguring objects and workflows, not from forking the codebase or starting a parallel product.
 - **Boring plumbing, bold behavior.** Reach for the most durable, unexciting primitive that works for infrastructure. Spend complexity on intelligence and trust, nowhere else. (An append-only table is the right amount of boring for the event store today; you don’t need a distributed log to start.)
+- **Licensing** this must always be at the top of each source file: // SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 elevenworks
 
 ## Current state
 

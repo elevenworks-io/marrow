@@ -1,0 +1,49 @@
+# --- Secrets & environment (never commit these) ---
+.env
+.env.*
+!.env.example
+*.local
+secrets/
+*.pem
+*.key
+
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# --- Logs & temp ---
+*.log
+logs/
+tmp/
+.cache/
+
+# --- Python (refine with ADR-0002) ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- Node / frontend (refine with ADR-0002) ---
+node_modules/
+dist/
+build/
+.next/
+coverage/
+*.tsbuildinfo
+
+# --- Build / deploy ---
+*.sqlite
+*.db
+.terraform/
+.wrangler/
+
+# Note: stack is decided in docs/adr/0002. Trim/extend this file to match.

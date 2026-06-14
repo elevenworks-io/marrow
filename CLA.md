@@ -54,6 +54,6 @@ You agree to notify Us of any facts or circumstances of which You become aware t
 
 ---
 
-**Contact:** legal@<your-domain> (replace with the real address)
+**Contact:** ops@elevenworks.io
 
 *Adapted from the Apache Software Foundation Individual Contributor License Agreement ("ICLA"). The Apache ICLA is provided by the ASF for reuse and adaptation.*

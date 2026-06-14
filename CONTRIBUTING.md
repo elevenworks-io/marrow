@@ -27,16 +27,14 @@ The current open foundational decision is **ADR-0002: the stack** (language, run
 - Conventional, scoped commits: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`.
 - One logical change per PR where possible. Explain the *why*, link the relevant ADR or issue.
 
-## Sign-off
+## Contributor License Agreement
 
-Contributions require a **Developer Certificate of Origin** sign-off — add `Signed-off-by: Your Name <you@example.com>` to each commit (`git commit -s`). This certifies you have the right to submit the work under the project license.
-
-> Note: MARROW is AGPL-3.0 and is developed with a commercial/managed offering in mind. If the project later adopts a Contributor License Agreement to enable dual-licensing, it will be stated clearly here before it applies. Until then, DCO sign-off is sufficient.
+Contributions require signing the **MARROW Individual Contributor License Agreement** ([`CLA.md`](CLA.md)). The first time you open a pull request, the CLA-assistant bot asks you to sign — a one-time confirmation in the PR thread. This is what lets MARROW be offered under both its open-source license (AGPL-3.0) and a commercial license.
 
 ## Conduct
 
-Be decent. We follow the [Contributor Covenant](https://www.contributor-covenant.org/) — add a `CODE_OF_CONDUCT.md` from the standard text. Disagreement is welcome; disrespect isn’t.
+Be decent. We follow the [Contributor Covenant](CODE_OF_CONDUCT.md). Disagreement is welcome; disrespect isn't.
 
 ## License
 
-By contributing, you agree your contributions are licensed under the repository’s license ([`LICENSE`](LICENSE), AGPL-3.0).
+MARROW is licensed under AGPL-3.0 ([`LICENSE`](LICENSE)); see [`LICENSING.md`](LICENSING.md) for the open-source + commercial model. Your contribution terms are governed by the CLA above.
