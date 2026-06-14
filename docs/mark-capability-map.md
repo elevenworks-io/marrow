@@ -104,11 +104,29 @@ layer arrives, not as a late surprise.
   run. CI must provide a Postgres service container, or the riskiest layer goes
   untested there. To wire up with the first CI pipeline.
 
+## Decisions taken (ADRs)
+
+The direction for the layers above is now recorded. Implementation follows the
+sequence; the decisions are settled.
+
+| Layer / concern | ADR | Decision in one line |
+|---|---|---|
+| L1 — event versioning | [ADR-0003](adr/0003-event-versioning.md) | Immutable events; evolve by upcasting on read, strict-on-write / version-scoped-on-read |
+| L2 — projections | [ADR-0004](adr/0004-projections-async-first.md) | Async-first projections; per-object authoritative reads stay strongly consistent |
+| Schema-morph | [ADR-0005](adr/0005-schema-morph.md) | Schema as events; object types as projections; borrow Zammad's wisdom, invert its DDL mechanism |
+| Vertical slice | [ADR-0006](adr/0006-first-organ-mcp-vertical-slice.md) | First organ = expose the Mark over MCP; dogfood; pulls minimal L2 |
+
 ## Status
 
 - **Layer 0 — done.** The Spine kernel: 31 tests (21 unit, 10 Postgres
   integration); `load == replay(read)` proven on both the in-memory and
   PostgreSQL adapters. Kernel merged in PR #1; review hardening (type/schema
   drift guard, audit-envelope validation) in PR #2.
-- **Layer 1 — next.** Envelope enrichment (correlation/causation ids,
-  idempotency, event versioning). To be proposed as ADR-0003.
+- **Layer 1 — decided ([ADR-0003](adr/0003-event-versioning.md)), next to build.**
+  Envelope enrichment: correlation/causation ids, idempotency keys, event
+  versioning. Versioning is settled; the id/idempotency details land as the
+  layer is built.
+- **Layers 2 / schema-morph / vertical slice — decided** (ADR-0004 / 0005 /
+  0006), sequenced after Layer 1.
+- **Layers 3a, 3b, 4 and the cross-cutting concerns — open.** Direction not yet
+  researched; to be analysed and recorded as their own ADRs next.
