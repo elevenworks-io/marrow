@@ -18,7 +18,7 @@ import type { Pool, PoolClient } from "pg";
 import type { EventMetadata, Json, MarkEvent, RecordedEvent } from "./event.js";
 import { applyEvent, replay, type ObjectState } from "./projection.js";
 import { ConcurrencyError, type AppendOptions, type Mark } from "./log.js";
-import { parseMarkEvent } from "./event-schema.js";
+import { parseMarkEvent, parseEventMetadata } from "./event-schema.js";
 
 export const MARK_EVENTS_TABLE = "mark_events";
 
@@ -74,7 +74,7 @@ interface EventRow {
   seq: number;
   type: string;
   payload: Record<string, Json>;
-  metadata: EventMetadata;
+  metadata: unknown; // validated at the trust boundary, not trusted as-is
   occurred_at: Date;
   recorded_at: Date;
 }
@@ -94,11 +94,14 @@ function fromRow(type: string, payload: Record<string, Json>): MarkEvent {
 
 function toRecorded(row: EventRow): RecordedEvent {
   return Object.freeze({
+    // global_seq is a monotonic total-order token, NOT a gapless counter:
+    // BIGSERIAL is non-transactional, so rejected appends leave gaps. Only its
+    // ordering is meaningful. (Number() is exact below 2^53 — ~9e15 events.)
     globalSeq: Number(row.global_seq),
     objectId: row.object_id,
     seq: row.seq,
     event: fromRow(row.type, row.payload),
-    metadata: row.metadata,
+    metadata: parseEventMetadata(row.metadata),
     occurredAt: row.occurred_at.toISOString(),
     recordedAt: row.recorded_at.toISOString(),
   });
