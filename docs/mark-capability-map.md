@@ -1,0 +1,132 @@
+# The Mark — capability map
+
+> A living **roadmap artifact**, not a spec and not the vision. [`VISION.md`](../VISION.md)
+> is the *why* and the permanent target; this file tracks *what the Mark still
+> needs to become* and *how those capabilities stack*. It changes as we build.
+> Decisions that get made along the way are recorded as ADRs in
+> [`docs/adr/`](adr/), one per layer.
+
+## The framing that matters
+
+What exists today is the **Spine kernel**, not "the Mark." The kernel is
+deliberately the smallest correct core (CLAUDE.md, *Current state*): a typed
+immutable event, an append-only log keyed by object id with a monotonic
+sequence, **one** projection, and `replay`. That is **layer 0** — the
+foundation stone, not the building.
+
+The Mark that `VISION.md §4` describes is a large subsystem. `VISION.md` is
+explicit that the Mark is *simultaneously* five things conventional software
+keeps in five separate systems: the durable-execution journal, the agent's
+memory, the audit trail, the simulation substrate (the Time Machine), and the
+learning signal. None of that exists yet. This map is the honest distance
+between layer 0 and that target.
+
+## What the Mark must be — capabilities vs. status
+
+Only capabilities **inside the Mark** (the substrate) are listed. The organs
+that *use* the Mark — the Senses, the Cortex, the Hands, the MCP fabric — are
+out of scope here; they sit on top of these capabilities.
+
+| Capability | What VISION requires | Status | Gap |
+|---|---|---|---|
+| **Event log & model** | append-only log; rich event taxonomy; **correlation/causation ids** so events form a decision chain; idempotency keys; event **versioning + upcasting** for immutable, long-lived events | partial | chains, idempotency, versioning — missing |
+| **Projections** | a *framework*: many named projections, persisted and queryable, rebuildable, incrementally updated, with subscriptions (e.g. `LISTEN/NOTIFY`); **schema-driven** projections (Schema-morph) | partial | one hardcoded in-memory fold only; query side, multiple/persisted projections, schema-morph — missing |
+| **Durable-execution journal** | agent runs recorded as events (step started/completed); idempotent resume after restart; checkpoints/positions; timers and retries | none | the whole role — missing |
+| **Memory** | episodic timeline per object **plus** semantic retrieval (embeddings/vector) over events and objects so the Cortex can pull relevant precedent; "learns over night" = nightly jobs derive memory and write it back | none | the whole role — missing |
+| **Audit reconstruction** | reconstruct *why*: the context seen, the reasoning, the confidence, the tools called, queried **as-of** the decision moment | partial | glass-box metadata field exists but nothing populates or reconstructs it; as-of query — missing |
+| **Time Machine / simulation** | replay **to a point in time**; **branch/fork** the timeline into a sandbox; run new agent behaviour against real history; diff outcomes | partial | replay folds a whole sequence; as-of replay and branching — missing |
+| **Confidence-gated autonomy** | decision events carrying confidence; thresholds expressed as events; escalation events; human corrections that flow back into memory | none | the whole role — missing |
+| **Integrity & sovereignty** | tamper-evidence (hash-chained events); retention; tenant/on-prem boundaries; encryption at rest | partial | DB triggers enforce append-only; hash-chain, retention, tenancy — missing |
+
+## How the capabilities stack
+
+Nothing above is parallel work — it stacks. Each layer folds onto the ones
+below it.
+
+```
+Layer 0  Event + append-only log + replay + one projection         ✅ HAVE (kernel)
+Layer 1  Envelope enrichment: correlation/causation ids,
+         idempotency keys, event versioning / upcasting             ← everything above depends on this
+Layer 2  Projection framework (many, persisted, rebuildable,
+         subscriptions) + query side + Schema-morph                 ← the Skin & "one substrate" depend here
+Layer 3a Durable-execution journal      (needs idempotency/L1 + projections/L2)
+Layer 3b Memory & retrieval             (needs projections/L2 + write-back jobs)
+Layer 4  Time Machine (as-of + branch)  ┐ (need global order + projections
+         Audit reconstruction           ┘  + correlation ids from L1)
+Cross-cutting  Confidence/autonomy event types · hash-chain integrity · sovereignty
+```
+
+Only on top of these do the **organs** live (Senses, Cortex, Hands, MCP fabric).
+They are not the Mark; they consume it.
+
+## Why this order
+
+- **Layer 1 first** because literally everything above hangs on it: glass-box
+  needs decision *chains* (correlation/causation), durable execution needs
+  *idempotency*, and the Time Machine needs old events to stay readable forever
+  (*versioning/upcasting*). Enriching the envelope after organs depend on it is
+  far more expensive than doing it now, while the event taxonomy is tiny.
+- **Layer 2 before 3/4** because the durable journal, memory, audit, and the
+  Time Machine all read through projections and the query side, not by folding
+  one object at a time.
+- **3a and 3b are siblings**, both resting on L1+L2; they can proceed in either
+  order or together.
+- **Cross-cutting concerns** (autonomy event types, integrity, sovereignty) are
+  introduced where they first bite, not bolted on at the end.
+
+## Working agreement
+
+- Each layer is proposed and recorded as its own **ADR** (`docs/adr/`),
+  numbered in order (Layer 1 → ADR-0003, and so on), with the same honest
+  options/trade-offs/decision format as ADR-0001/0002.
+- Each layer is built in **small, verifiable steps**, test-first, exactly like
+  the kernel — `event → projection → replay` is the pattern every layer extends,
+  never replaces.
+- This map is updated as layers land, so "what the Mark still needs" is always
+  visible rather than living in someone's head.
+
+## Known deferrals (layer 0)
+
+These are **conscious decisions**, not undiscovered bugs. They are correct to
+defer at the kernel stage; recorded here so they surface on purpose when their
+layer arrives, not as a late surprise.
+
+- **Snapshots.** `load` and `append` fold an object's whole history every time
+  (append re-folds to compute the next version). At ~10k events per object this
+  is the classic event-sourcing cliff. ADR-0001 anticipates snapshots as a
+  *cache* derived from events; introduce them when the pain is real (around
+  Layer 2/3), never before — and never as a second source of truth.
+- **Numbered migrations.** A single idempotent `migrate()` is enough today. An
+  evolving schema needs ordered, versioned migrations — lands with Layer 1
+  (event versioning) or the first schema change, whichever comes first.
+- **Postgres in CI.** `describe.skipIf(!url)` means that without
+  `MARROW_TEST_DATABASE_URL` the most intricate path (`PostgresMark`) does not
+  run. CI must provide a Postgres service container, or the riskiest layer goes
+  untested there. To wire up with the first CI pipeline.
+
+## Decisions taken (ADRs)
+
+The direction for the layers above is now recorded. Implementation follows the
+sequence; the decisions are settled.
+
+| Layer / concern | ADR | Decision in one line |
+|---|---|---|
+| L1 — event versioning | [ADR-0003](adr/0003-event-versioning.md) | Immutable events; evolve by upcasting on read, strict-on-write / version-scoped-on-read |
+| L2 — projections | [ADR-0004](adr/0004-projections-async-first.md) | Async-first projections; per-object authoritative reads stay strongly consistent |
+| Schema-morph | [ADR-0005](adr/0005-schema-morph.md) | Schema as events; object types as projections; borrow Zammad's wisdom, invert its DDL mechanism |
+| Vertical slice | [ADR-0006](adr/0006-first-organ-mcp-vertical-slice.md) | First organ = expose the Mark over MCP; dogfood; pulls minimal L2 |
+
+## Status
+
+- **Layer 0 — done.** The Spine kernel: 31 tests (21 unit, 10 Postgres
+  integration); `load == replay(read)` proven on both the in-memory and
+  PostgreSQL adapters. Kernel merged in PR #1; review hardening (type/schema
+  drift guard, audit-envelope validation) in PR #2.
+- **Layer 1 — decided ([ADR-0003](adr/0003-event-versioning.md)), next to build.**
+  Envelope enrichment: correlation/causation ids, idempotency keys, event
+  versioning. Versioning is settled; the id/idempotency details land as the
+  layer is built.
+- **Layers 2 / schema-morph / vertical slice — decided** (ADR-0004 / 0005 /
+  0006), sequenced after Layer 1.
+- **Layers 3a, 3b, 4 and the cross-cutting concerns — open.** Direction not yet
+  researched; to be analysed and recorded as their own ADRs next.
