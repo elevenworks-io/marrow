@@ -1,0 +1,193 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 elevenworks
+
+/**
+ * PostgreSQL adapter for the Mark (ADR-0002).
+ *
+ * The event store is a single append-only table: `global_seq BIGSERIAL` gives a
+ * total order across all objects, `UNIQUE (object_id, seq)` gives per-object
+ * monotonic ordering and a hard concurrency backstop. Append-only is enforced
+ * in the database itself — a trigger rejects every UPDATE, DELETE, and TRUNCATE,
+ * so the log cannot be rewritten even by a direct SQL client (ADR-0001).
+ *
+ * Implements the same `Mark` contract as `InMemoryMark`; the kernel's behaviour
+ * is identical, only the durability changes.
+ */
+
+import type { Pool, PoolClient } from "pg";
+import type { EventMetadata, Json, MarkEvent, RecordedEvent } from "./event.js";
+import { applyEvent, replay, type ObjectState } from "./projection.js";
+import { ConcurrencyError, type AppendOptions, type Mark } from "./log.js";
+import { parseMarkEvent } from "./event-schema.js";
+
+export const MARK_EVENTS_TABLE = "mark_events";
+
+const DEFAULT_METADATA: EventMetadata = { actor: "system" };
+
+/** Idempotently create the append-only event store and its guards. */
+export async function migrate(pool: Pool): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${MARK_EVENTS_TABLE} (
+      global_seq  BIGSERIAL PRIMARY KEY,
+      object_id   TEXT        NOT NULL,
+      seq         INTEGER     NOT NULL,
+      type        TEXT        NOT NULL,
+      payload     JSONB       NOT NULL,
+      metadata    JSONB       NOT NULL,
+      occurred_at TIMESTAMPTZ NOT NULL,
+      recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (object_id, seq)
+    );
+
+    -- Row-level guard for UPDATE/DELETE. References only TG_OP, never NEW/OLD.
+    CREATE OR REPLACE FUNCTION ${MARK_EVENTS_TABLE}_no_mutate_fn()
+      RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'the Mark is append-only: % on ${MARK_EVENTS_TABLE} is forbidden', TG_OP;
+      END;
+    $$ LANGUAGE plpgsql;
+
+    -- Separate statement-level guard for TRUNCATE: a statement-level trigger has
+    -- no NEW/OLD, so keeping its function distinct avoids a future footgun.
+    CREATE OR REPLACE FUNCTION ${MARK_EVENTS_TABLE}_no_truncate_fn()
+      RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'the Mark is append-only: TRUNCATE on ${MARK_EVENTS_TABLE} is forbidden';
+      END;
+    $$ LANGUAGE plpgsql;
+
+    DROP TRIGGER IF EXISTS ${MARK_EVENTS_TABLE}_no_mutate ON ${MARK_EVENTS_TABLE};
+    CREATE TRIGGER ${MARK_EVENTS_TABLE}_no_mutate
+      BEFORE UPDATE OR DELETE ON ${MARK_EVENTS_TABLE}
+      FOR EACH ROW EXECUTE FUNCTION ${MARK_EVENTS_TABLE}_no_mutate_fn();
+
+    DROP TRIGGER IF EXISTS ${MARK_EVENTS_TABLE}_no_truncate ON ${MARK_EVENTS_TABLE};
+    CREATE TRIGGER ${MARK_EVENTS_TABLE}_no_truncate
+      BEFORE TRUNCATE ON ${MARK_EVENTS_TABLE}
+      FOR EACH STATEMENT EXECUTE FUNCTION ${MARK_EVENTS_TABLE}_no_truncate_fn();
+  `);
+}
+
+interface EventRow {
+  global_seq: string; // bigint comes back as string from pg
+  object_id: string;
+  seq: number;
+  type: string;
+  payload: Record<string, Json>;
+  metadata: EventMetadata;
+  occurred_at: Date;
+  recorded_at: Date;
+}
+
+/** Split a domain event into its discriminant and the rest (the JSONB payload). */
+function toPayload(event: MarkEvent): Record<string, Json> {
+  const { type: _type, ...payload } = event;
+  return payload as Record<string, Json>;
+}
+
+/** Reconstruct a domain event from a stored row, validated against the schema. */
+function fromRow(type: string, payload: Record<string, Json>): MarkEvent {
+  // Validate the full event at this trust boundary: a malformed payload (schema
+  // drift, a direct SQL write) must be rejected, never folded into state.
+  return parseMarkEvent({ type, ...payload });
+}
+
+function toRecorded(row: EventRow): RecordedEvent {
+  return Object.freeze({
+    globalSeq: Number(row.global_seq),
+    objectId: row.object_id,
+    seq: row.seq,
+    event: fromRow(row.type, row.payload),
+    metadata: row.metadata,
+    occurredAt: row.occurred_at.toISOString(),
+    recordedAt: row.recorded_at.toISOString(),
+  });
+}
+
+export class PostgresMark implements Mark {
+  constructor(private readonly pool: Pool) {}
+
+  async append(
+    objectId: string,
+    event: MarkEvent,
+    options: AppendOptions = {},
+  ): Promise<RecordedEvent> {
+    if (event.type === "ObjectCreated" && event.id !== objectId) {
+      throw new Error(`ObjectCreated.id "${event.id}" must match the log key "${objectId}"`);
+    }
+
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Serialise appends per object so the read-validate-insert is atomic. The
+      // two-argument form gives a 64-bit lock key (two distinct 32-bit hashes),
+      // making cross-object collisions — and the spurious serialisation they
+      // cause — negligible. UNIQUE(object_id, seq) remains the hard backstop.
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtext($1), hashtext('marrow:' || $1))",
+        [objectId],
+      );
+
+      const current = await this.#loadWithin(client, objectId);
+      const currentVersion = current?.version ?? 0;
+
+      if (options.expectedVersion !== undefined && options.expectedVersion !== currentVersion) {
+        throw new ConcurrencyError(objectId, options.expectedVersion, currentVersion);
+      }
+
+      // Throws if the event is illegal for the object's current state.
+      applyEvent(current, event);
+
+      const occurredAt = options.occurredAt ?? new Date().toISOString();
+      const metadata = options.metadata ?? DEFAULT_METADATA;
+      const { rows } = await client.query<EventRow>(
+        `INSERT INTO ${MARK_EVENTS_TABLE}
+           (object_id, seq, type, payload, metadata, occurred_at)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING global_seq, object_id, seq, type, payload, metadata, occurred_at, recorded_at`,
+        [objectId, currentVersion + 1, event.type, toPayload(event), metadata, occurredAt],
+      );
+
+      await client.query("COMMIT");
+      return toRecorded(rows[0]!);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      // UNIQUE(object_id, seq) backstop: a lost race on seq is a concurrency conflict.
+      if (isUniqueViolation(error)) {
+        throw new ConcurrencyError(objectId, options.expectedVersion ?? -1, -1);
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async read(objectId: string): Promise<readonly RecordedEvent[]> {
+    const { rows } = await this.pool.query<EventRow>(
+      `SELECT global_seq, object_id, seq, type, payload, metadata, occurred_at, recorded_at
+         FROM ${MARK_EVENTS_TABLE}
+        WHERE object_id = $1
+        ORDER BY seq ASC`,
+      [objectId],
+    );
+    return rows.map(toRecorded);
+  }
+
+  async load(objectId: string): Promise<ObjectState | null> {
+    const events = await this.read(objectId);
+    return events.length === 0 ? null : replay(events.map((r) => r.event));
+  }
+
+  async #loadWithin(client: PoolClient, objectId: string): Promise<ObjectState | null> {
+    const { rows } = await client.query<EventRow>(
+      `SELECT type, payload FROM ${MARK_EVENTS_TABLE} WHERE object_id = $1 ORDER BY seq ASC`,
+      [objectId],
+    );
+    if (rows.length === 0) return null;
+    return replay(rows.map((r) => fromRow(r.type, r.payload)));
+  }
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "23505";
+}
