@@ -131,4 +131,16 @@ describe.skipIf(!url)("PostgresMark", () => {
     await expect(mark.read("drift-1")).rejects.toThrow();
     await expect(mark.load("drift-1")).rejects.toThrow();
   });
+
+  it("rejects a stored event whose glass-box metadata is missing its actor", async () => {
+    // The audit envelope gets the same boundary strictness as the payload:
+    // metadata without an actor cannot be trusted as a reconstruction of "why".
+    await pool.query(
+      `INSERT INTO ${MARK_EVENTS_TABLE} (object_id, seq, type, payload, metadata, occurred_at)
+       VALUES ($1, 1, 'ObjectCreated', $2, $3, now())`,
+      ["meta-1", { id: "meta-1", objectType: "ticket" }, {}],
+    );
+
+    await expect(mark.read("meta-1")).rejects.toThrow();
+  });
 });

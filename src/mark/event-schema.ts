@@ -12,7 +12,7 @@
  */
 
 import { z } from "zod";
-import type { Json, MarkEvent } from "./event.js";
+import type { EventMetadata, Json, MarkEvent } from "./event.js";
 
 const jsonSchema: z.ZodType<Json> = z.lazy(() =>
   z.union([
@@ -34,9 +34,33 @@ export const markEventSchema = z.discriminatedUnion("type", [
 ]);
 
 /**
+ * The glass-box audit envelope, enforced at runtime. `actor` is required — an
+ * event with no cause cannot reconstruct "why". Known fields are typed
+ * strictly; `passthrough` keeps any additional audit context (richer reasoning,
+ * structured tool traces) rather than discarding or rejecting it, since the
+ * glass-box record is deliberately open-ended.
+ */
+export const eventMetadataSchema = z
+  .object({
+    actor: z.string(),
+    reason: z.string().optional(),
+    confidence: z.number().optional(),
+    tools: z.array(z.string()).optional(),
+  })
+  .passthrough();
+
+/**
  * Validate an untrusted `{ type, ...payload }` object and return it as a
  * `MarkEvent`. Throws `ZodError` if it is not a structurally valid event.
  */
 export function parseMarkEvent(candidate: unknown): MarkEvent {
   return markEventSchema.parse(candidate) as MarkEvent;
+}
+
+/**
+ * Validate untrusted metadata and return it as `EventMetadata`. Throws
+ * `ZodError` if `actor` is missing or a known field has the wrong type.
+ */
+export function parseEventMetadata(candidate: unknown): EventMetadata {
+  return eventMetadataSchema.parse(candidate) as EventMetadata;
 }
