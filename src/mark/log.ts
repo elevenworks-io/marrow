@@ -17,6 +17,7 @@
 
 import type { EventMetadata, MarkEvent, RecordedEvent } from "./event.js";
 import { applyEvent, replay, type ObjectState } from "./projection.js";
+import { currentVersion as currentSchemaVersion, MARK_VERSIONS } from "./upcasting.js";
 
 /** Raised when an append's `expectedVersion` does not match current version. */
 export class ConcurrencyError extends Error {
@@ -86,6 +87,7 @@ export class InMemoryMark implements Mark {
       globalSeq: ++this.#globalSeq,
       objectId,
       seq: currentVersion + 1,
+      schemaVersion: currentSchemaVersion(event.type, MARK_VERSIONS),
       event,
       metadata: options.metadata ?? DEFAULT_METADATA,
       occurredAt: options.occurredAt ?? new Date().toISOString(),

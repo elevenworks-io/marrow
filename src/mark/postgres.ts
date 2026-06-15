@@ -20,6 +20,7 @@ import { applyEvent, replay, type ObjectState } from "./projection.js";
 import { ConcurrencyError, type AppendOptions, type Mark } from "./log.js";
 import { parseMarkEvent, parseEventMetadata } from "./event-schema.js";
 import { migrate, MARK_EVENTS_TABLE } from "./migrations.js";
+import { currentVersion as currentSchemaVersion, upcastToCurrent, MARK_VERSIONS } from "./upcasting.js";
 
 // The store's schema and migrations live in ./migrations.ts; re-exported here
 // so callers of the Postgres adapter keep a single import surface.
@@ -31,6 +32,7 @@ interface EventRow {
   global_seq: string; // bigint comes back as string from pg
   object_id: string;
   seq: number;
+  schema_version: number;
   type: string;
   payload: Record<string, Json>;
   metadata: unknown; // validated at the trust boundary, not trusted as-is
@@ -44,11 +46,15 @@ function toPayload(event: MarkEvent): Record<string, Json> {
   return payload as Record<string, Json>;
 }
 
-/** Reconstruct a domain event from a stored row, validated against the schema. */
-function fromRow(type: string, payload: Record<string, Json>): MarkEvent {
-  // Validate the full event at this trust boundary: a malformed payload (schema
-  // drift, a direct SQL write) must be rejected, never folded into state.
-  return parseMarkEvent({ type, ...payload });
+/**
+ * Reconstruct a domain event from a stored row: lift it from its stored version
+ * to the current one (ADR-0003), then validate the result against the current
+ * schema. A malformed payload or a version from the future is rejected here,
+ * never folded into state.
+ */
+function fromRow(type: string, schemaVersion: number, payload: Record<string, Json>): MarkEvent {
+  const upcasted = upcastToCurrent(type, schemaVersion, payload, MARK_VERSIONS);
+  return parseMarkEvent({ type, ...upcasted });
 }
 
 function toRecorded(row: EventRow): RecordedEvent {
@@ -59,7 +65,9 @@ function toRecorded(row: EventRow): RecordedEvent {
     globalSeq: Number(row.global_seq),
     objectId: row.object_id,
     seq: row.seq,
-    event: fromRow(row.type, row.payload),
+    // The in-memory event is upcast to current, so it conforms to current.
+    schemaVersion: currentSchemaVersion(row.type, MARK_VERSIONS),
+    event: fromRow(row.type, row.schema_version, row.payload),
     metadata: parseEventMetadata(row.metadata),
     occurredAt: row.occurred_at.toISOString(),
     recordedAt: row.recorded_at.toISOString(),
@@ -104,10 +112,18 @@ export class PostgresMark implements Mark {
       const metadata = options.metadata ?? DEFAULT_METADATA;
       const { rows } = await client.query<EventRow>(
         `INSERT INTO ${MARK_EVENTS_TABLE}
-           (object_id, seq, type, payload, metadata, occurred_at)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING global_seq, object_id, seq, type, payload, metadata, occurred_at, recorded_at`,
-        [objectId, currentVersion + 1, event.type, toPayload(event), metadata, occurredAt],
+           (object_id, seq, type, payload, metadata, occurred_at, schema_version)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING global_seq, object_id, seq, schema_version, type, payload, metadata, occurred_at, recorded_at`,
+        [
+          objectId,
+          currentVersion + 1,
+          event.type,
+          toPayload(event),
+          metadata,
+          occurredAt,
+          currentSchemaVersion(event.type, MARK_VERSIONS),
+        ],
       );
 
       await client.query("COMMIT");
@@ -126,7 +142,7 @@ export class PostgresMark implements Mark {
 
   async read(objectId: string): Promise<readonly RecordedEvent[]> {
     const { rows } = await this.pool.query<EventRow>(
-      `SELECT global_seq, object_id, seq, type, payload, metadata, occurred_at, recorded_at
+      `SELECT global_seq, object_id, seq, schema_version, type, payload, metadata, occurred_at, recorded_at
          FROM ${MARK_EVENTS_TABLE}
         WHERE object_id = $1
         ORDER BY seq ASC`,
@@ -142,11 +158,11 @@ export class PostgresMark implements Mark {
 
   async #loadWithin(client: PoolClient, objectId: string): Promise<ObjectState | null> {
     const { rows } = await client.query<EventRow>(
-      `SELECT type, payload FROM ${MARK_EVENTS_TABLE} WHERE object_id = $1 ORDER BY seq ASC`,
+      `SELECT type, payload, schema_version FROM ${MARK_EVENTS_TABLE} WHERE object_id = $1 ORDER BY seq ASC`,
       [objectId],
     );
     if (rows.length === 0) return null;
-    return replay(rows.map((r) => fromRow(r.type, r.payload)));
+    return replay(rows.map((r) => fromRow(r.type, r.schema_version, r.payload)));
   }
 }
 

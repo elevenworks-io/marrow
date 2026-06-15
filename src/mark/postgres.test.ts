@@ -119,6 +119,28 @@ describe.skipIf(!url)("PostgresMark", () => {
     ).rejects.toThrow(/append-only/i);
   });
 
+  it("stamps the current schema version on append and round-trips it", async () => {
+    const recorded = await mark.append("v-1", {
+      type: "ObjectCreated",
+      id: "v-1",
+      objectType: "ticket",
+    });
+    expect(recorded.schemaVersion).toBe(1);
+
+    const [read] = await mark.read("v-1");
+    expect(read!.schemaVersion).toBe(1);
+  });
+
+  it("rejects a stored event whose schema version is newer than current (from the future)", async () => {
+    await pool.query(
+      `INSERT INTO ${MARK_EVENTS_TABLE} (object_id, seq, type, payload, metadata, occurred_at, schema_version)
+       VALUES ($1, 1, 'ObjectCreated', $2, $3, now(), $4)`,
+      ["future-1", { id: "future-1", objectType: "ticket" }, { actor: "system" }, 999],
+    );
+
+    await expect(mark.read("future-1")).rejects.toThrow();
+  });
+
   it("rejects a stored event whose payload does not match its type (schema drift)", async () => {
     // A malformed row written straight to the table — a raw INSERT is allowed
     // (only UPDATE/DELETE/TRUNCATE are blocked); this simulates schema drift or

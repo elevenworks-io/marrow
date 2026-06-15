@@ -118,6 +118,16 @@ describe("InMemoryMark", () => {
     expect(ok.seq).toBe(2);
   });
 
+  it("stamps the current schema version on recorded events", async () => {
+    const mark = new InMemoryMark();
+    const recorded = await mark.append("obj-1", {
+      type: "ObjectCreated",
+      id: "obj-1",
+      objectType: "ticket",
+    });
+    expect(recorded.schemaVersion).toBe(1);
+  });
+
   it("records glass-box metadata on the envelope", async () => {
     const mark = new InMemoryMark();
     const recorded = await mark.append(

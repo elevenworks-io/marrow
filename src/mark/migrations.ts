@@ -69,8 +69,22 @@ const m0001_kernel: Migration = {
   },
 };
 
+/**
+ * Migration 2 — record each event's schema version (ADR-0003). Existing rows
+ * predate versioning and are therefore version 1; the default backfills them.
+ */
+const m0002_event_schema_version: Migration = {
+  version: 2,
+  name: "event_schema_version",
+  async up(client) {
+    await client.query(
+      `ALTER TABLE ${MARK_EVENTS_TABLE} ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1`,
+    );
+  },
+};
+
 /** The ordered migration list. Append new migrations; never edit shipped ones. */
-export const MIGRATIONS: readonly Migration[] = [m0001_kernel];
+export const MIGRATIONS: readonly Migration[] = [m0001_kernel, m0002_event_schema_version];
 
 /**
  * Apply all pending migrations in version order. Each runs in its own

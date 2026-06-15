@@ -57,6 +57,9 @@ export interface RecordedEvent {
   readonly globalSeq: number;
   readonly objectId: string;
   readonly seq: number;
+  /** The schema version the in-memory `event` conforms to (the current version
+   *  of its type — an older stored event is upcast to current on read). */
+  readonly schemaVersion: number;
   readonly event: MarkEvent;
   readonly metadata: EventMetadata;
   readonly occurredAt: string;

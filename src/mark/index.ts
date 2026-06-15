@@ -17,3 +17,16 @@ export {
 } from "./event-schema.js";
 export { type Mark, type AppendOptions, InMemoryMark, ConcurrencyError } from "./log.js";
 export { PostgresMark, migrate, MARK_EVENTS_TABLE } from "./postgres.js";
+export {
+  type Migration,
+  MIGRATIONS,
+  MIGRATIONS_TABLE,
+} from "./migrations.js";
+export {
+  type VersionRegistry,
+  type EventUpcaster,
+  currentVersion,
+  upcastToCurrent,
+  UpcastError,
+  MARK_VERSIONS,
+} from "./upcasting.js";
