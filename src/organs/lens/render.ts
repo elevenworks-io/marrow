@@ -26,13 +26,20 @@ function header(e: EpisodeSummary): string {
 export function renderTrace(forest: TraceForest, episodes: readonly EpisodeSummary[] = []): string {
   const byCorrelation = new Map(episodes.map((e) => [e.correlationId, e]));
   const lines: string[] = [];
+  // Forest-scoped: replayTrace() guarantees each eventId occupies exactly one
+  // position on a valid Mark (danglers become roots, never duplicates), so this
+  // never elides a legitimate node. It fires only on corrupt cyclic input — the
+  // label says "already shown" (not "cycle") because cross-root sharing, were
+  // the forest contract ever to relax to a DAG, would also land here.
   const seen = new Set<string>();
+  // Counts uniquely-rendered nodes. On valid input that equals the event count
+  // (no cycles); on corrupt cyclic input it under-counts, which is acceptable.
   let count = 0;
 
   const walk = (node: TraceNode, depth: number): void => {
     const indent = "  ".repeat(depth);
     if (seen.has(node.eventId)) {
-      lines.push(`${indent}↻ cycle: ${node.eventId} (already shown)`);
+      lines.push(`${indent}↻ already shown: ${node.eventId}`);
       return;
     }
     seen.add(node.eventId);
@@ -43,6 +50,11 @@ export function renderTrace(forest: TraceForest, episodes: readonly EpisodeSumma
   };
 
   for (const root of forest) {
+    // Print the episode header just above its DecisionProposed root. Gating on
+    // the node type (not merely a correlation match) is deliberate: a domain
+    // event sharing the decision's correlationId must not trigger a second
+    // header. summarizeEpisodes() only emits episodes for correlations that hold
+    // a DecisionProposed, so a matched episode always has such a root to anchor.
     const episode = byCorrelation.get(root.correlationId);
     if (episode !== undefined && root.type === "DecisionProposed") {
       lines.push(header(episode));

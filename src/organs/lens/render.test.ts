@@ -64,6 +64,18 @@ describe("renderTrace", () => {
     expect(render(events)).toContain("human approved");
   });
 
+  it("flags a dangling causation (sliced read) with the external-cause marker", () => {
+    // A confidence assessment whose causing proposal lives outside the slice:
+    // replayTrace surfaces it as a root with externalCause set — a glass-box
+    // signal that the trace is partial, which the renderer must show.
+    const sliced = [
+      rec({ eventId: "a", globalSeq: 4, correlationId: "p", causationId: "p-outside", event: { type: "ConfidenceAssessed", confidence: 0.9, threshold: 0.8, tier: "T3" } }),
+    ];
+    const out = renderTrace(replayTrace(sliced), summarizeEpisodes(sliced));
+    expect(out).toContain("↑");
+    expect(out).toContain("p-outsid");
+  });
+
   it("no-ops cleanly on an empty forest", () => {
     const out = renderTrace([], []);
     expect(out).toContain("reconstructed from 0 event(s)");
