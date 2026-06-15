@@ -211,6 +211,18 @@ What the first acting agent teaches (fill from real runs — the slice's purpose
   + post-hoc calibration, ADR-0010) — the placeholder is fine for the slice, not for
   production. The A/B harness is what makes the instability *visible* instead of
   silently trusted.
+- **Open decision — observability: Mark-native vs. external (Langfuse?).** The
+  Mark is *designed* to be the observability/audit layer (§3.1/§3.2, ADR-0009) —
+  the decision chain + metadata **is** the trace. An external LLM-tracing tool
+  (e.g. Langfuse) is conceptually the "second journal" ADR-0002 forbids, and a
+  proprietary-cloud dependency cuts against §3.5. *But* its eval/dataset/
+  cost-tracking tooling is exactly what the **confidence-calibration** step will
+  want. Decision, **deferred and coupled to calibration**: when we build
+  calibration, choose between (a) a Mark-native trace view (the Skin / Time
+  Machine — on-thesis) and (b) Langfuse strictly as an *optional, ephemeral,
+  self-hosted observability adapter behind a seam* — never authoritative, Mark
+  stays the single source of truth. Record the choice as its own ADR; do **not**
+  bolt it on before then (§3.8).
 - _(still open:)_ Does the version-only pass-through (decision events bump
   `ObjectState.version`) confuse consumers, or is it honest? When does 2B-lite →
   full 2B pull (the calibration-curve query)? What does a real EU/on-prem adapter
