@@ -56,10 +56,23 @@ describe("summarizeEpisodes", () => {
     expect(s!.draft).toBe("Maybe?");
   });
 
+  it("a proposed-only episode has null threshold, tier, gateVerdict, and confidence", () => {
+    const events = [
+      rec({ eventId: "Ep", globalSeq: 1, correlationId: "E", event: { type: "DecisionProposed", draft: "Draft.", perceivedObjectId: "c1", perceivedSeq: 1 } }),
+    ];
+    const [s] = summarizeEpisodes(events);
+    expect(s!.status).toBe("proposed");
+    expect(s!.gateVerdict).toBeNull();
+    expect(s!.confidence).toBeNull();
+    expect(s!.threshold).toBeNull();
+    expect(s!.tier).toBeNull();
+    expect(s!.draft).toBe("Draft.");
+  });
+
   it("restores outcome with evidence when present", () => {
     const events = [
       ...actedChain("E", 0),
-      rec({ eventId: "Eo", globalSeq: 5, correlationId: "E", causationId: "Ex", event: { type: "OutcomeObserved", wasCorrect: true, evidence: "human approved" } }),
+      rec({ eventId: "Eo", globalSeq: 4, correlationId: "E", causationId: "Ex", event: { type: "OutcomeObserved", wasCorrect: true, evidence: "human approved" } }),
     ];
     const [s] = summarizeEpisodes(events);
     expect(s!.outcome).toEqual({ wasCorrect: true, evidence: "human approved" });

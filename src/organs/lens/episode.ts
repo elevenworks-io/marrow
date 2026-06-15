@@ -26,8 +26,12 @@ export interface EpisodeSummary {
   readonly outcome?: { readonly wasCorrect: boolean; readonly evidence: string | null };
 }
 
+/** Total order on a single Mark: globalSeq is unique; eventId is tiebreak (parity with trace.ts). */
+const byOrder = (a: { globalSeq: number; eventId: string }, b: { globalSeq: number; eventId: string }): number =>
+  a.globalSeq - b.globalSeq || (a.eventId < b.eventId ? -1 : a.eventId > b.eventId ? 1 : 0);
+
 export function summarizeEpisodes(events: readonly RecordedEvent[]): readonly EpisodeSummary[] {
-  const sorted = [...events].sort((a, b) => a.globalSeq - b.globalSeq);
+  const sorted = [...events].sort(byOrder);
   const byCorrelation = new Map<string, RecordedEvent[]>();
   for (const r of sorted) {
     const list = byCorrelation.get(r.correlationId) ?? [];
@@ -45,13 +49,17 @@ export function summarizeEpisodes(events: readonly RecordedEvent[]): readonly Ep
     const assessed = slice.find((r) => r.event.type === "ConfidenceAssessed");
     const observed = slice.find((r) => r.event.type === "OutcomeObserved");
 
-    // Source draft from the raw event — replayDecision nulls it on escalation
-    const draft = proposed?.event.type === "DecisionProposed" ? proposed.event.draft : null;
-    const perceivedObjectId = proposed?.event.type === "DecisionProposed" ? proposed.event.perceivedObjectId : null;
-    const perceivedSeq = proposed?.event.type === "DecisionProposed" ? proposed.event.perceivedSeq : null;
-    // threshold and tier are dropped by replayDecision; restore from the raw event
-    const threshold = assessed?.event.type === "ConfidenceAssessed" ? assessed.event.threshold : null;
-    const tier = assessed?.event.type === "ConfidenceAssessed" ? assessed.event.tier : null;
+    // Narrow once each; `.find` guarantees the type but TS still needs the guard.
+    const dp = proposed?.event.type === "DecisionProposed" ? proposed.event : null;
+    const ca = assessed?.event.type === "ConfidenceAssessed" ? assessed.event : null;
+
+    // Source draft from the raw event — replayDecision nulls it on escalation.
+    const draft = dp?.draft ?? null;
+    const perceivedObjectId = dp?.perceivedObjectId ?? null;
+    const perceivedSeq = dp?.perceivedSeq ?? null;
+    // threshold and tier are dropped by replayDecision; restore from the raw event.
+    const threshold = ca?.threshold ?? null;
+    const tier = ca?.tier ?? null;
     const gateVerdict: "act" | "escalate" | null =
       episode.status === "acted" ? "act" : episode.status === "escalated" ? "escalate" : null;
 
