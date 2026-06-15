@@ -32,6 +32,28 @@ describe("markEventSchema", () => {
     expect(() => parseMarkEvent({ type: "NoteAdded", text: "note" })).not.toThrow();
   });
 
+  it("accepts every agent decision-chain variant (ADR-0010)", () => {
+    expect(() =>
+      parseMarkEvent({ type: "DecisionProposed", draft: "Sorry…", perceivedObjectId: "c1", perceivedSeq: 2 }),
+    ).not.toThrow();
+    expect(() =>
+      parseMarkEvent({ type: "ConfidenceAssessed", confidence: 0.9, threshold: 0.8, tier: "T3" }),
+    ).not.toThrow();
+    expect(() => parseMarkEvent({ type: "Acted", draftRef: "evt-1" })).not.toThrow();
+    expect(() => parseMarkEvent({ type: "Escalated", reason: "below threshold" })).not.toThrow();
+    expect(() => parseMarkEvent({ type: "OutcomeObserved", wasCorrect: true, evidence: null })).not.toThrow();
+    expect(() =>
+      parseMarkEvent({ type: "OutcomeObserved", wasCorrect: false, evidence: "customer confirmed" }),
+    ).not.toThrow();
+  });
+
+  it("rejects a decision event with an invalid tier or missing field", () => {
+    expect(() =>
+      parseMarkEvent({ type: "ConfidenceAssessed", confidence: 0.9, threshold: 0.8, tier: "T9" }),
+    ).toThrow();
+    expect(() => parseMarkEvent({ type: "Acted" })).toThrow();
+  });
+
   it("rejects an unknown type and extra keys", () => {
     expect(() => parseMarkEvent({ type: "Nope" })).toThrow();
     expect(() => parseMarkEvent({ type: "StateChanged", state: "open", extra: 1 })).toThrow();

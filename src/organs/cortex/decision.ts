@@ -98,6 +98,8 @@ export function replayDecision(events: readonly RecordedEvent[]): DecisionEpisod
             draft: episode.draft,
             confidence: episode.confidence,
             perceivedObjectId: episode.perceivedObjectId,
+            // `evidence` is kept on the raw event (glass-box, via get_history);
+            // the projection deliberately surfaces only `wasCorrect` for now.
             perceivedSeq: episode.perceivedSeq,
             outcome: { wasCorrect: e.wasCorrect },
           };
