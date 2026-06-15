@@ -67,4 +67,19 @@ describe("replay", () => {
     expect(Object.isFrozen(state.attributes)).toBe(true);
     expect(Object.isFrozen(state.notes)).toBe(true);
   });
+
+  it("folds decision-chain events as version-only pass-through (ObjectState stays field-clean)", () => {
+    const state = replay([
+      { type: "ObjectCreated", id: "c1", objectType: "complaint" },
+      { type: "AttributeSet", key: "text", value: "my order never arrived" },
+      { type: "DecisionProposed", draft: "We're sorry…", perceivedObjectId: "c1", perceivedSeq: 2 },
+      { type: "ConfidenceAssessed", confidence: 0.9, threshold: 0.8, tier: "T3" },
+      { type: "Acted", draftRef: "evt-1" },
+    ]);
+
+    expect(state.version).toBe(5);
+    expect(state.attributes).toEqual({ text: "my order never arrived" });
+    expect(state.state).toBeNull();
+    expect("decision" in state).toBe(false);
+  });
 });

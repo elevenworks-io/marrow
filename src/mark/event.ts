@@ -24,12 +24,31 @@ export type Json =
   | readonly Json[]
   | { readonly [key: string]: Json };
 
+/** The action-risk tier that sets the autonomy floor (ADR-0010). */
+export type ActionTier = "T1" | "T2" | "T3" | "T4";
+
 /** The domain event: *what happened* to an object. */
 export type MarkEvent =
   | { readonly type: "ObjectCreated"; readonly id: string; readonly objectType: string }
   | { readonly type: "AttributeSet"; readonly key: string; readonly value: Json }
   | { readonly type: "StateChanged"; readonly state: string }
-  | { readonly type: "NoteAdded"; readonly text: string };
+  | { readonly type: "NoteAdded"; readonly text: string }
+  // Agent decision chain (ADR-0010), recorded on the acted-upon object's stream.
+  | {
+      readonly type: "DecisionProposed";
+      readonly draft: string;
+      readonly perceivedObjectId: string;
+      readonly perceivedSeq: number;
+    }
+  | {
+      readonly type: "ConfidenceAssessed";
+      readonly confidence: number;
+      readonly threshold: number;
+      readonly tier: ActionTier;
+    }
+  | { readonly type: "Acted"; readonly draftRef: string }
+  | { readonly type: "Escalated"; readonly reason: string }
+  | { readonly type: "OutcomeObserved"; readonly wasCorrect: boolean; readonly evidence: string | null };
 
 /** The discriminant values of `MarkEvent`, for narrowing and validation. */
 export type MarkEventType = MarkEvent["type"];

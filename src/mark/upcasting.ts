@@ -85,6 +85,11 @@ const MARK_CURRENT = {
   AttributeSet: 1,
   StateChanged: 1,
   NoteAdded: 1,
+  DecisionProposed: 1,
+  ConfidenceAssessed: 1,
+  Acted: 1,
+  Escalated: 1,
+  OutcomeObserved: 1,
 } satisfies Record<MarkEventType, number>;
 
 export const MARK_VERSIONS: VersionRegistry = {

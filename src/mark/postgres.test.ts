@@ -206,6 +206,42 @@ describe.skipIf(!url)("PostgresMark", () => {
     expect(chain.every((e) => e.correlationId === root.correlationId)).toBe(true);
   });
 
+  it("round-trips the agent decision chain and load equals replay(read)", async () => {
+    await mark.append("c1", { type: "ObjectCreated", id: "c1", objectType: "complaint" });
+    await mark.append("c1", { type: "AttributeSet", key: "text", value: "late delivery" });
+    const proposed = await mark.append(
+      "c1",
+      { type: "DecisionProposed", draft: "We're sorry…", perceivedObjectId: "c1", perceivedSeq: 2 },
+      { metadata: { actor: "cortex", confidence: 0.9 } },
+    );
+    await mark.append("c1", {
+      type: "ConfidenceAssessed",
+      confidence: 0.9,
+      threshold: 0.8,
+      tier: "T3",
+    });
+    await mark.append("c1", { type: "Acted", draftRef: proposed.eventId });
+
+    const read = await mark.read("c1");
+    expect(read.map((e) => e.event.type)).toEqual([
+      "ObjectCreated",
+      "AttributeSet",
+      "DecisionProposed",
+      "ConfidenceAssessed",
+      "Acted",
+    ]);
+
+    // ObjectState stays field-clean; version counts every event in the stream.
+    const loaded = await mark.load("c1");
+    expect(loaded).toEqual(replay(read.map((r) => r.event)));
+    expect(loaded?.version).toBe(5);
+    expect(loaded?.attributes).toEqual({ text: "late delivery" });
+
+    // Glass-box confidence survives the round-trip.
+    const proposedRead = read.find((e) => e.event.type === "DecisionProposed");
+    expect(proposedRead?.metadata.confidence).toBe(0.9);
+  });
+
   it("stamps the current schema version on append and round-trips it", async () => {
     const recorded = await mark.append("v-1", {
       type: "ObjectCreated",

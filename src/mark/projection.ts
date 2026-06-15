@@ -72,6 +72,17 @@ export function applyEvent(state: ObjectState | null, event: MarkEvent): ObjectS
       return Object.freeze({ ...state, state: event.state, version });
     case "NoteAdded":
       return Object.freeze({ ...state, notes: Object.freeze([...state.notes, event.text]), version });
+    case "DecisionProposed":
+    case "ConfidenceAssessed":
+    case "Acted":
+    case "Escalated":
+    case "OutcomeObserved":
+      // Agent decision-chain events (ADR-0010) live on the object's stream but
+      // are not domain mutations: a separate projection (replayDecision) folds
+      // them, keyed by correlationId. Here they only advance the version, so
+      // ObjectState stays field-clean (ADR-0004: decision/cross-object read
+      // models are their own named projections, not facets of ObjectState).
+      return Object.freeze({ ...state, version });
     default: {
       const unreachable: never = event;
       throw new ReplayError(`unknown event type: ${JSON.stringify(unreachable)}`);
