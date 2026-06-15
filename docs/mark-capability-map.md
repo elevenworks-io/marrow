@@ -152,6 +152,16 @@ sequence.
   *intent* with no dispatcher. Puts the provisional ADRs 0007/0009/0010 under
   real, agent-produced pressure. Spec:
   `docs/superpowers/specs/2026-06-15-cortex-slice-design.md`.
+- **Decider adapters (Anthropic + OpenAI) — done.** Two concrete deciders behind
+  the existing `Decider` seam (the slice shipped it fake-only), plus a standalone
+  `compareDeciders` A/B harness and a `cortex:ab` demo. Proves §3.5 concretely: a
+  vendor is one adapter file, zero core changes — a **containment test** enforces
+  that no Cortex-core file imports a vendor SDK. Anthropic uses forced tool-use
+  (kernel is zod v3; the SDK's `zodOutputFormat` is zod v4), OpenAI uses
+  `zodResponseFormat`; both validate against one shared proposal schema. Model is
+  cheap-tier config; confidence stays a placeholder; no router (ADR-0011). Tests
+  never touch the network. Spec:
+  `docs/superpowers/specs/2026-06-15-decider-adapters-design.md`.
 - **Layer 2 / schema-morph — decided** (ADR-0004 / 0005), not yet built.
 - **Layers 3a, 3b, 4 and cross-cutting — *provisional*** (ADR-0007–0011), held
   loosely pending what the slice and the Cortex reveal.
@@ -188,8 +198,20 @@ What the first acting agent teaches (fill from real runs — the slice's purpose
   must *resume*, not stall — the idempotent short-circuit had to be narrowed to
   terminal episodes, and resume recovers the recorded proposal rather than
   re-rolling the model. The thin slice already exercised ADR-0007's record-the-result.
-- _(to record after more use:)_ Is the `Decider` seam the right shape when a real
-  model adapter lands? Is recorded `confidence` (placeholder) enough envelope for
-  audit? Does the version-only pass-through (decision events bump
+- **The seam holds under real models; self-reported confidence does not.** Live
+  A/B (`cortex:ab`, Anthropic `claude-haiku-4-5` vs OpenAI `gpt-4o-mini`) on the
+  *same* complaint, *same* prompt, *same* threshold: the two models returned
+  **different confidences that flipped the gate** — one run had haiku at 0.72 →
+  *escalate* while gpt-4o-mini was 0.9 → *act*; a prior run had both at 0.9 →
+  *act*. So verbalized confidence is **unstable across models and across runs** —
+  exactly ADR-0010's "confidence ≠ calibration" made concrete. The `Decider` seam
+  itself needed **zero** changes for the second provider (containment test green),
+  which validates its shape. **Implication:** before confidence gates anything real,
+  replace self-report with a calibrated method (self-consistency / semantic entropy
+  + post-hoc calibration, ADR-0010) — the placeholder is fine for the slice, not for
+  production. The A/B harness is what makes the instability *visible* instead of
+  silently trusted.
+- _(still open:)_ Does the version-only pass-through (decision events bump
   `ObjectState.version`) confuse consumers, or is it honest? When does 2B-lite →
-  full 2B pull (the calibration-curve query)?
+  full 2B pull (the calibration-curve query)? What does a real EU/on-prem adapter
+  (vLLM/Ollama) reveal about the seam?

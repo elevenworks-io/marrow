@@ -13,3 +13,12 @@ export { type Decider, type DecisionContext, type Proposal, FakeDecider } from "
 export { gate, type GateOutcome } from "./gate.js";
 export { replayDecision, type DecisionEpisode } from "./decision.js";
 export { readObjectWithDecision, type ObjectWithDecision } from "./read.js";
+export {
+  compareDeciders,
+  type DeciderEntry,
+  type ComparisonRow,
+} from "./ab.js";
+export { buildProposalPrompt, type ProposalPrompt } from "./deciders/prompt.js";
+export { proposalSchema, parseProposal } from "./deciders/proposal-schema.js";
+export { AnthropicDecider, type AnthropicDeciderOptions } from "./deciders/anthropic.js";
+export { OpenAIDecider, type OpenAIDeciderOptions } from "./deciders/openai.js";

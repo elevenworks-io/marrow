@@ -50,7 +50,33 @@ npm run db:up        # disposable PostgreSQL 17 (Docker)
 npm test             # the full suite, both adapters
 npm run tour         # a guided, visual proof the substrate works
 npm run mcp:demo     # watch an agent drive the Mark over real MCP
+npm run cortex:demo  # the agent loop: perceive → decide → gate → record (no API key)
 ```
+
+### Configuration (environment & secrets)
+
+Secrets live in a local `.env`, which is **gitignored and must never be committed**.
+The committed [`.env.example`](.env.example) is the placeholder reference — copy it
+and fill in your own values:
+
+```bash
+cp .env.example .env   # then edit .env with your keys
+```
+
+`.env` is loaded automatically by the demos that need it (via `dotenv`). The core
+substrate and the adapters read `process.env` directly and depend on no secret to
+build or test — `npm test` and `npm run typecheck` are green with no keys set.
+
+The **live A/B** runs the same complaint through the Anthropic and OpenAI deciders
+and shows both drafts plus what the autonomy gate would decide for each — proof the
+`Decider` seam is vendor-neutral (a third provider would be one more adapter file):
+
+```bash
+npm run cortex:ab    # needs ANTHROPIC_API_KEY, OPENAI_API_KEY, MARROW_CORTEX_OPENAI_MODEL
+```
+
+Without those it prints what to set and makes no call. **Never paste real keys into
+issues, PRs, or chat; rotate any key that leaks.**
 
 ### Layout
 
@@ -58,7 +84,8 @@ npm run mcp:demo     # watch an agent drive the Mark over real MCP
 |---|---|
 | `src/mark/` | the Spine — the Mark (events, projection, log, Postgres, migrations, versioning) |
 | `src/organs/mcp/` | the first organ — the Mark exposed over MCP |
-| `examples/` | runnable demos (`mark-tour.ts`, `mcp-demo.ts`) |
+| `src/organs/cortex/` | the agent loop — perceive/decide/gate/record, the model-agnostic `Decider` seam + adapters |
+| `examples/` | runnable demos (`mark-tour.ts`, `mcp-demo.ts`, `cortex-demo.ts`, `cortex-ab.ts`) |
 | `docs/adr/` | the decision log |
 | `docs/mark-capability-map.md` | the roadmap: capabilities, status, deferrals, findings |
 
