@@ -142,6 +142,16 @@ sequence.
 - **Vertical slice — done ([ADR-0006](adr/0006-first-organ-mcp-vertical-slice.md)).**
   The first organ: the Mark exposed over MCP (7 tools), dogfoodable from an
   assistant; `listObjects` is the first cross-object read model.
+- **Cortex slice — done.** The first organ *with intelligence* (the agent loop):
+  perceive a complaint → decide (draft + confidence) → gate on action tier T3
+  (ADR-0010) → record the decision chain (`DecisionProposed → ConfidenceAssessed
+  → Acted | Escalated`) on the Mark. `ObjectState` stays field-clean; the
+  decision trace is a **separate projection** (`replayDecision`, keyed by
+  correlationId — 2B-lite, the second read model after `list_objects`). The
+  model is a swappable `Decider` seam (fake-only here); "act" records a draft
+  *intent* with no dispatcher. Puts the provisional ADRs 0007/0009/0010 under
+  real, agent-produced pressure. Spec:
+  `docs/superpowers/specs/2026-06-15-cortex-slice-design.md`.
 - **Layer 2 / schema-morph — decided** (ADR-0004 / 0005), not yet built.
 - **Layers 3a, 3b, 4 and cross-cutting — *provisional*** (ADR-0007–0011), held
   loosely pending what the slice and the Cortex reveal.
@@ -165,3 +175,21 @@ What real use teaches — the slice's whole purpose (ADR-0006).
   tools/objects — an explicit `caseId`, a session-scoped "current case", or
   `causedBy` threading? Decide with several real workflow data points, not this
   one.
+
+## Findings from the Cortex slice
+
+What the first acting agent teaches (fill from real runs — the slice's purpose):
+
+- **Within-object decision episodes thread cleanly.** A Cortex run's chain shares
+  one `correlationId`; unlike the MCP slice (each call its own root), the agent's
+  own action has a real "why" to thread. Cross-object cases remain open (decide
+  with more workflow data points, per the MCP-slice finding).
+- **Durable-by-default bit early.** A partial run (crash after `DecisionProposed`)
+  must *resume*, not stall — the idempotent short-circuit had to be narrowed to
+  terminal episodes, and resume recovers the recorded proposal rather than
+  re-rolling the model. The thin slice already exercised ADR-0007's record-the-result.
+- _(to record after more use:)_ Is the `Decider` seam the right shape when a real
+  model adapter lands? Is recorded `confidence` (placeholder) enough envelope for
+  audit? Does the version-only pass-through (decision events bump
+  `ObjectState.version`) confuse consumers, or is it honest? When does 2B-lite →
+  full 2B pull (the calibration-curve query)?
