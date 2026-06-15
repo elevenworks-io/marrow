@@ -13,7 +13,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "tour": "tsx examples/mark-tour.ts"
+    "tour": "tsx examples/mark-tour.ts",
+    "db:up": "docker rm -f marrow-pg >/dev/null 2>&1; docker run -d --name marrow-pg -e POSTGRES_PASSWORD=marrow -e POSTGRES_DB=marrow_test -p 55432:5432 postgres:17-alpine",
+    "db:down": "docker rm -f marrow-pg"
   },
   "dependencies": {
     "pg": "^8.13.1",
