@@ -64,6 +64,12 @@ export interface AppendOptions {
   readonly occurredAt?: string;
   /** The event that caused this one — its lineage is inherited (glass-box). */
   readonly causedBy?: CausedBy;
+  /**
+   * De-duplication key. An append carrying a key already seen returns the
+   * originally recorded event instead of writing a new one, so a retried
+   * operation never double-writes (ADR-0007). Keys are unique across the Mark.
+   */
+  readonly idempotencyKey?: string;
 }
 
 /** The append-only event log. */
@@ -81,6 +87,7 @@ const DEFAULT_METADATA: EventMetadata = { actor: "system" };
 /** In-memory reference implementation of the Mark. */
 export class InMemoryMark implements Mark {
   readonly #byObject = new Map<string, RecordedEvent[]>();
+  readonly #byIdempotencyKey = new Map<string, RecordedEvent>();
   readonly #log: RecordedEvent[] = [];
   #globalSeq = 0;
 
@@ -89,6 +96,11 @@ export class InMemoryMark implements Mark {
     event: MarkEvent,
     options: AppendOptions = {},
   ): Promise<RecordedEvent> {
+    if (options.idempotencyKey !== undefined) {
+      const seen = this.#byIdempotencyKey.get(options.idempotencyKey);
+      if (seen !== undefined) return seen;
+    }
+
     const existing = this.#byObject.get(objectId) ?? [];
     const current = foldOrNull(existing);
     const currentVersion = current?.version ?? 0;
@@ -132,6 +144,9 @@ export class InMemoryMark implements Mark {
     }
     stored.push(recorded);
     this.#log.push(recorded);
+    if (options.idempotencyKey !== undefined) {
+      this.#byIdempotencyKey.set(options.idempotencyKey, recorded);
+    }
     return recorded;
   }
 

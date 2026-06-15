@@ -99,6 +99,12 @@ export class PostgresMark implements Mark {
       throw new Error(`ObjectCreated.id "${event.id}" must match the log key "${objectId}"`);
     }
 
+    // Idempotent retry: a key already recorded returns the original event.
+    if (options.idempotencyKey !== undefined) {
+      const seen = await this.#findByIdempotencyKey(options.idempotencyKey);
+      if (seen !== null) return seen;
+    }
+
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -128,8 +134,8 @@ export class PostgresMark implements Mark {
       const { rows } = await client.query<EventRow>(
         `INSERT INTO ${MARK_EVENTS_TABLE}
            (object_id, seq, type, payload, metadata, occurred_at, schema_version,
-            event_id, correlation_id, causation_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            event_id, correlation_id, causation_id, idempotency_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          RETURNING ${EVENT_COLUMNS}`,
         [
           objectId,
@@ -142,6 +148,7 @@ export class PostgresMark implements Mark {
           eventId,
           correlationId,
           causationId,
+          options.idempotencyKey ?? null,
         ],
       );
 
@@ -149,14 +156,31 @@ export class PostgresMark implements Mark {
       return toRecorded(rows[0]!);
     } catch (error) {
       await client.query("ROLLBACK");
-      // UNIQUE(object_id, seq) backstop: a lost race on seq is a concurrency conflict.
       if (isUniqueViolation(error)) {
+        // A concurrent append with the same idempotency key won the race: return
+        // the event it recorded rather than failing the retry.
+        if (
+          options.idempotencyKey !== undefined &&
+          violatedConstraint(error) === `${MARK_EVENTS_TABLE}_idempotency_key_uidx`
+        ) {
+          const seen = await this.#findByIdempotencyKey(options.idempotencyKey);
+          if (seen !== null) return seen;
+        }
+        // Otherwise it is the UNIQUE(object_id, seq) backstop — a lost seq race.
         throw new ConcurrencyError(objectId, options.expectedVersion ?? -1, -1);
       }
       throw error;
     } finally {
       client.release();
     }
+  }
+
+  async #findByIdempotencyKey(key: string): Promise<RecordedEvent | null> {
+    const { rows } = await this.pool.query<EventRow>(
+      `SELECT ${EVENT_COLUMNS} FROM ${MARK_EVENTS_TABLE} WHERE idempotency_key = $1`,
+      [key],
+    );
+    return rows.length === 0 ? null : toRecorded(rows[0]!);
   }
 
   async read(objectId: string): Promise<readonly RecordedEvent[]> {
@@ -198,4 +222,13 @@ export class PostgresMark implements Mark {
 
 function isUniqueViolation(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "23505";
+}
+
+/** The name of the constraint/index a Postgres error violated, if any. */
+function violatedConstraint(error: unknown): string | undefined {
+  if (typeof error === "object" && error !== null && "constraint" in error) {
+    const { constraint } = error as { constraint?: unknown };
+    return typeof constraint === "string" ? constraint : undefined;
+  }
+  return undefined;
 }

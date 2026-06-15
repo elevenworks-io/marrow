@@ -119,6 +119,23 @@ describe.skipIf(!url)("PostgresMark", () => {
     ).rejects.toThrow(/append-only/i);
   });
 
+  it("deduplicates appends that carry the same idempotency key", async () => {
+    const first = await mark.append(
+      "a",
+      { type: "ObjectCreated", id: "a", objectType: "ticket" },
+      { idempotencyKey: "k1" },
+    );
+    const retry = await mark.append(
+      "a",
+      { type: "ObjectCreated", id: "a", objectType: "ticket" },
+      { idempotencyKey: "k1" },
+    );
+
+    expect(retry.eventId).toBe(first.eventId);
+    expect(retry.globalSeq).toBe(first.globalSeq);
+    expect(await mark.read("a")).toHaveLength(1);
+  });
+
   it("records correlation/causation lineage and reconstructs a case across objects", async () => {
     const root = await mark.append("a", { type: "ObjectCreated", id: "a", objectType: "ticket" });
     expect(root.correlationId).toBe(root.eventId);

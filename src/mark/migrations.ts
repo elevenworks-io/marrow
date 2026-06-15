@@ -106,11 +106,30 @@ const m0003_event_lineage: Migration = {
   },
 };
 
+/**
+ * Migration 4 — idempotency keys (ADR-0007). A nullable column with a partial
+ * unique index: many events have no key, but any key that is present is unique
+ * across the Mark, so a retried append deduplicates rather than double-writes.
+ */
+const m0004_idempotency_key: Migration = {
+  version: 4,
+  name: "idempotency_key",
+  async up(client) {
+    await client.query(`
+      ALTER TABLE ${MARK_EVENTS_TABLE} ADD COLUMN idempotency_key TEXT;
+      CREATE UNIQUE INDEX ${MARK_EVENTS_TABLE}_idempotency_key_uidx
+        ON ${MARK_EVENTS_TABLE} (idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+    `);
+  },
+};
+
 /** The ordered migration list. Append new migrations; never edit shipped ones. */
 export const MIGRATIONS: readonly Migration[] = [
   m0001_kernel,
   m0002_event_schema_version,
   m0003_event_lineage,
+  m0004_idempotency_key,
 ];
 
 /**
