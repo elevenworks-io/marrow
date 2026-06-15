@@ -33,6 +33,9 @@ const REPLY_TIER = "T3" as const;
 /**
  * Run `context` through every entry concurrently and return one row per entry,
  * in entry order, each carrying the proposal and the gate outcome at `threshold`.
+ *
+ * All-or-nothing: if any decider throws (e.g. a bad key on one provider), the
+ * whole call rejects — a comparison with a silently-missing arm would mislead.
  */
 export async function compareDeciders(
   context: DecisionContext,

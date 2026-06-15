@@ -10,10 +10,13 @@
  */
 
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 
-const CORTEX_DIR = join(process.cwd(), "src", "organs", "cortex");
+// Anchor on this file's own location (…/cortex/deciders/containment.test.ts),
+// so the scan is independent of the process working directory.
+const CORTEX_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 
 /** Files allowed to import a vendor SDK — the adapters themselves. */
 const ADAPTER_FILES = new Set([
