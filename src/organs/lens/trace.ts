@@ -8,7 +8,7 @@
  * the trace IS the events (VISION §3.1, ADR-0009/0004).
  */
 
-import type { Json, MarkEvent } from "../../mark/index.js";
+import type { ActionTier, EventMetadata, Json, MarkEvent, MarkEventType, RecordedEvent } from "../../mark/index.js";
 
 const clip = (s: string, n = 60): string => (s.length > n ? `${s.slice(0, n)}…` : s);
 // `value` is a `Json` value, so JSON.stringify always returns a string here.
@@ -43,4 +43,96 @@ export function summaryOf(event: MarkEvent): string {
       throw new Error(`unhandled event type: ${String(_exhaustive)}`);
     }
   }
+}
+
+export interface TraceNode {
+  readonly eventId: string;
+  readonly correlationId: string;
+  readonly causationId: string | null;
+  readonly type: MarkEventType;
+  readonly seq: number;
+  readonly globalSeq: number;
+  readonly objectId: string;
+  readonly occurredAt: string;
+  readonly actor: string;
+  readonly confidence?: number;
+  readonly tier?: ActionTier;
+  readonly externalCause?: string;
+  readonly summary: string;
+  readonly event: MarkEvent;
+  readonly metadata: EventMetadata;
+  readonly children: readonly TraceNode[];
+}
+
+export type TraceForest = readonly TraceNode[];
+
+/** Mutable builder mirror of TraceNode (children grow during the fold). */
+type Building = Omit<TraceNode, "children" | "externalCause"> & {
+  children: Building[];
+  externalCause?: string;
+};
+
+/** Total order on a single Mark: globalSeq is unique; eventId is tiebreak
+ *  insurance against accidentally-merged streams. */
+const byOrder = (a: { globalSeq: number; eventId: string }, b: { globalSeq: number; eventId: string }): number =>
+  a.globalSeq - b.globalSeq || (a.eventId < b.eventId ? -1 : a.eventId > b.eventId ? 1 : 0);
+
+function toNode(r: RecordedEvent): Building {
+  const e = r.event;
+  const node: Building = {
+    eventId: r.eventId,
+    correlationId: r.correlationId,
+    causationId: r.causationId,
+    type: e.type,
+    seq: r.seq,
+    globalSeq: r.globalSeq,
+    objectId: r.objectId,
+    occurredAt: r.occurredAt,
+    actor: r.metadata.actor,
+    summary: summaryOf(e),
+    event: e,
+    metadata: r.metadata,
+    children: [],
+  };
+  const confidence = e.type === "ConfidenceAssessed" ? e.confidence : r.metadata.confidence;
+  if (confidence !== undefined) (node as { confidence?: number }).confidence = confidence;
+  if (e.type === "ConfidenceAssessed") (node as { tier?: ActionTier }).tier = e.tier;
+  return node;
+}
+
+/**
+ * Fold an event stream into a causal forest. Roots are events with no cause, or
+ * with a `causationId` that dangles outside the set (flagged `externalCause` —
+ * forward-looking; today's data never produces it). Pure and order-independent:
+ * shuffle the input, get an identical forest.
+ */
+export function replayTrace(events: readonly RecordedEvent[]): TraceForest {
+  const sorted = [...events].sort(byOrder);
+  const map = new Map<string, Building>();
+  for (const r of sorted) {
+    if (map.has(r.eventId)) {
+      throw new Error(`duplicate eventId "${r.eventId}" — corrupt event set`);
+    }
+    map.set(r.eventId, toNode(r));
+  }
+
+  const roots: Building[] = [];
+  for (const r of sorted) {
+    const node = map.get(r.eventId) as Building;
+    if (r.causationId === null) {
+      roots.push(node);
+      continue;
+    }
+    const parent = map.get(r.causationId);
+    if (parent === undefined) {
+      node.externalCause = r.causationId;
+      roots.push(node);
+    } else {
+      parent.children.push(node);
+    }
+  }
+
+  for (const node of map.values()) node.children.sort(byOrder);
+  roots.sort(byOrder);
+  return roots as unknown as TraceForest;
 }
