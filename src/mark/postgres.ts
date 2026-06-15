@@ -19,54 +19,13 @@ import type { EventMetadata, Json, MarkEvent, RecordedEvent } from "./event.js";
 import { applyEvent, replay, type ObjectState } from "./projection.js";
 import { ConcurrencyError, type AppendOptions, type Mark } from "./log.js";
 import { parseMarkEvent, parseEventMetadata } from "./event-schema.js";
+import { migrate, MARK_EVENTS_TABLE } from "./migrations.js";
 
-export const MARK_EVENTS_TABLE = "mark_events";
+// The store's schema and migrations live in ./migrations.ts; re-exported here
+// so callers of the Postgres adapter keep a single import surface.
+export { migrate, MARK_EVENTS_TABLE };
 
 const DEFAULT_METADATA: EventMetadata = { actor: "system" };
-
-/** Idempotently create the append-only event store and its guards. */
-export async function migrate(pool: Pool): Promise<void> {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS ${MARK_EVENTS_TABLE} (
-      global_seq  BIGSERIAL PRIMARY KEY,
-      object_id   TEXT        NOT NULL,
-      seq         INTEGER     NOT NULL,
-      type        TEXT        NOT NULL,
-      payload     JSONB       NOT NULL,
-      metadata    JSONB       NOT NULL,
-      occurred_at TIMESTAMPTZ NOT NULL,
-      recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      UNIQUE (object_id, seq)
-    );
-
-    -- Row-level guard for UPDATE/DELETE. References only TG_OP, never NEW/OLD.
-    CREATE OR REPLACE FUNCTION ${MARK_EVENTS_TABLE}_no_mutate_fn()
-      RETURNS trigger AS $$
-      BEGIN
-        RAISE EXCEPTION 'the Mark is append-only: % on ${MARK_EVENTS_TABLE} is forbidden', TG_OP;
-      END;
-    $$ LANGUAGE plpgsql;
-
-    -- Separate statement-level guard for TRUNCATE: a statement-level trigger has
-    -- no NEW/OLD, so keeping its function distinct avoids a future footgun.
-    CREATE OR REPLACE FUNCTION ${MARK_EVENTS_TABLE}_no_truncate_fn()
-      RETURNS trigger AS $$
-      BEGIN
-        RAISE EXCEPTION 'the Mark is append-only: TRUNCATE on ${MARK_EVENTS_TABLE} is forbidden';
-      END;
-    $$ LANGUAGE plpgsql;
-
-    DROP TRIGGER IF EXISTS ${MARK_EVENTS_TABLE}_no_mutate ON ${MARK_EVENTS_TABLE};
-    CREATE TRIGGER ${MARK_EVENTS_TABLE}_no_mutate
-      BEFORE UPDATE OR DELETE ON ${MARK_EVENTS_TABLE}
-      FOR EACH ROW EXECUTE FUNCTION ${MARK_EVENTS_TABLE}_no_mutate_fn();
-
-    DROP TRIGGER IF EXISTS ${MARK_EVENTS_TABLE}_no_truncate ON ${MARK_EVENTS_TABLE};
-    CREATE TRIGGER ${MARK_EVENTS_TABLE}_no_truncate
-      BEFORE TRUNCATE ON ${MARK_EVENTS_TABLE}
-      FOR EACH STATEMENT EXECUTE FUNCTION ${MARK_EVENTS_TABLE}_no_truncate_fn();
-  `);
-}
 
 interface EventRow {
   global_seq: string; // bigint comes back as string from pg

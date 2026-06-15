@@ -23,6 +23,7 @@ describe.skipIf(!url)("PostgresMark", () => {
 
   beforeEach(async () => {
     await pool.query(`DROP TABLE IF EXISTS ${MARK_EVENTS_TABLE} CASCADE`);
+    await pool.query(`DROP TABLE IF EXISTS schema_migrations CASCADE`);
     await migrate(pool);
     mark = new PostgresMark(pool);
   });

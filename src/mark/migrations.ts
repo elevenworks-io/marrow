@@ -1,0 +1,113 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 elevenworks
+
+/**
+ * Numbered, ordered schema migrations for the Mark's PostgreSQL store.
+ *
+ * The kernel's single idempotent `migrate()` is no longer enough once the
+ * schema evolves (ADR-0003 / the capability map deferral). Migrations are an
+ * append-only, ordered list: each runs once, in version order, inside its own
+ * transaction, and is recorded in `schema_migrations`. Migrations are never
+ * edited or reordered after they ship — a schema change is a *new* migration,
+ * mirroring how events themselves evolve.
+ */
+
+import type { Pool, PoolClient } from "pg";
+
+export const MARK_EVENTS_TABLE = "mark_events";
+export const MIGRATIONS_TABLE = "schema_migrations";
+
+/** One ordered, run-once schema change. */
+export interface Migration {
+  readonly version: number;
+  readonly name: string;
+  up(client: PoolClient): Promise<void>;
+}
+
+/** Migration 1 — the kernel: the append-only event store and its guards. */
+const m0001_kernel: Migration = {
+  version: 1,
+  name: "kernel_event_store",
+  async up(client) {
+    await client.query(`
+      CREATE TABLE ${MARK_EVENTS_TABLE} (
+        global_seq  BIGSERIAL PRIMARY KEY,
+        object_id   TEXT        NOT NULL,
+        seq         INTEGER     NOT NULL,
+        type        TEXT        NOT NULL,
+        payload     JSONB       NOT NULL,
+        metadata    JSONB       NOT NULL,
+        occurred_at TIMESTAMPTZ NOT NULL,
+        recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (object_id, seq)
+      );
+
+      -- Row-level guard for UPDATE/DELETE. References only TG_OP, never NEW/OLD.
+      CREATE OR REPLACE FUNCTION ${MARK_EVENTS_TABLE}_no_mutate_fn()
+        RETURNS trigger AS $$
+        BEGIN
+          RAISE EXCEPTION 'the Mark is append-only: % on ${MARK_EVENTS_TABLE} is forbidden', TG_OP;
+        END;
+      $$ LANGUAGE plpgsql;
+
+      -- Separate statement-level guard for TRUNCATE (no NEW/OLD in that context).
+      CREATE OR REPLACE FUNCTION ${MARK_EVENTS_TABLE}_no_truncate_fn()
+        RETURNS trigger AS $$
+        BEGIN
+          RAISE EXCEPTION 'the Mark is append-only: TRUNCATE on ${MARK_EVENTS_TABLE} is forbidden';
+        END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE TRIGGER ${MARK_EVENTS_TABLE}_no_mutate
+        BEFORE UPDATE OR DELETE ON ${MARK_EVENTS_TABLE}
+        FOR EACH ROW EXECUTE FUNCTION ${MARK_EVENTS_TABLE}_no_mutate_fn();
+
+      CREATE TRIGGER ${MARK_EVENTS_TABLE}_no_truncate
+        BEFORE TRUNCATE ON ${MARK_EVENTS_TABLE}
+        FOR EACH STATEMENT EXECUTE FUNCTION ${MARK_EVENTS_TABLE}_no_truncate_fn();
+    `);
+  },
+};
+
+/** The ordered migration list. Append new migrations; never edit shipped ones. */
+export const MIGRATIONS: readonly Migration[] = [m0001_kernel];
+
+/**
+ * Apply all pending migrations in version order. Each runs in its own
+ * transaction and is recorded in `schema_migrations`; already-applied
+ * migrations are skipped, so this is safe to run on every startup.
+ */
+export async function migrate(pool: Pool): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${MIGRATIONS_TABLE} (
+      version    INTEGER PRIMARY KEY,
+      name       TEXT NOT NULL,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
+  const { rows } = await pool.query<{ version: number }>(
+    `SELECT version FROM ${MIGRATIONS_TABLE}`,
+  );
+  const applied = new Set(rows.map((r) => r.version));
+
+  for (const migration of [...MIGRATIONS].sort((a, b) => a.version - b.version)) {
+    if (applied.has(migration.version)) continue;
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await migration.up(client);
+      await client.query(
+        `INSERT INTO ${MIGRATIONS_TABLE} (version, name) VALUES ($1, $2)`,
+        [migration.version, migration.name],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+}
