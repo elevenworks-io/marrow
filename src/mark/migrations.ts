@@ -17,6 +17,9 @@ import type { Pool, PoolClient } from "pg";
 export const MARK_EVENTS_TABLE = "mark_events";
 export const MIGRATIONS_TABLE = "schema_migrations";
 
+/** Advisory-lock key (ASCII "MARK") serialising the migration run across instances. */
+const MIGRATION_LOCK_KEY = 0x4d41524b;
+
 /** One ordered, run-once schema change. */
 export interface Migration {
   readonly version: number;
@@ -88,7 +91,8 @@ const m0002_event_schema_version: Migration = {
  * stable per-event anchor (existing rows get a generated uuid). `correlation_id`
  * and `causation_id` are nullable: a NULL correlation is read as the event's own
  * id (a root), so no backfill UPDATE is needed — which the append-only trigger
- * would forbid anyway.
+ * would forbid anyway. (`gen_random_uuid()` is a core function since Postgres 13,
+ * which is our floor.)
  */
 const m0003_event_lineage: Migration = {
   version: 3,
@@ -135,39 +139,45 @@ export const MIGRATIONS: readonly Migration[] = [
 /**
  * Apply all pending migrations in version order. Each runs in its own
  * transaction and is recorded in `schema_migrations`; already-applied
- * migrations are skipped, so this is safe to run on every startup.
+ * migrations are skipped, so this is safe to run on every startup. A session
+ * advisory lock serialises the whole run so concurrent cold-starting instances
+ * don't race to apply the same migration.
  */
 export async function migrate(pool: Pool): Promise<void> {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS ${MIGRATIONS_TABLE} (
-      version    INTEGER PRIMARY KEY,
-      name       TEXT NOT NULL,
-      applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    )
-  `);
+  const client = await pool.connect();
+  try {
+    await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_KEY]);
 
-  const { rows } = await pool.query<{ version: number }>(
-    `SELECT version FROM ${MIGRATIONS_TABLE}`,
-  );
-  const applied = new Set(rows.map((r) => r.version));
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${MIGRATIONS_TABLE} (
+        version    INTEGER PRIMARY KEY,
+        name       TEXT NOT NULL,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
 
-  for (const migration of [...MIGRATIONS].sort((a, b) => a.version - b.version)) {
-    if (applied.has(migration.version)) continue;
+    const { rows } = await client.query<{ version: number }>(
+      `SELECT version FROM ${MIGRATIONS_TABLE}`,
+    );
+    const applied = new Set(rows.map((r) => r.version));
 
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      await migration.up(client);
-      await client.query(
-        `INSERT INTO ${MIGRATIONS_TABLE} (version, name) VALUES ($1, $2)`,
-        [migration.version, migration.name],
-      );
-      await client.query("COMMIT");
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    } finally {
-      client.release();
+    for (const migration of [...MIGRATIONS].sort((a, b) => a.version - b.version)) {
+      if (applied.has(migration.version)) continue;
+      try {
+        await client.query("BEGIN");
+        await migration.up(client);
+        await client.query(
+          `INSERT INTO ${MIGRATIONS_TABLE} (version, name) VALUES ($1, $2)`,
+          [migration.version, migration.name],
+        );
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      }
     }
+  } finally {
+    await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY]).catch(() => {});
+    client.release();
   }
 }

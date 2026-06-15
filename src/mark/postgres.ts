@@ -49,6 +49,13 @@ const EVENT_COLUMNS =
   "global_seq, object_id, seq, schema_version, event_id, correlation_id, causation_id, " +
   "type, payload, metadata, occurred_at, recorded_at";
 
+/** The narrow row shape read during append's validation (only what folding needs). */
+interface LoadRow {
+  type: string;
+  schema_version: number;
+  payload: Record<string, Json>;
+}
+
 /** Split a domain event into its discriminant and the rest (the JSONB payload). */
 function toPayload(event: MarkEvent): Record<string, Json> {
   const { type: _type, ...payload } = event;
@@ -157,16 +164,14 @@ export class PostgresMark implements Mark {
     } catch (error) {
       await client.query("ROLLBACK");
       if (isUniqueViolation(error)) {
-        // A concurrent append with the same idempotency key won the race: return
-        // the event it recorded rather than failing the retry.
-        if (
-          options.idempotencyKey !== undefined &&
-          violatedConstraint(error) === `${MARK_EVENTS_TABLE}_idempotency_key_uidx`
-        ) {
+        // Decide by data, not by constraint name (which the pg driver does not
+        // populate reliably for partial indexes). If our key is now present, a
+        // concurrent append with the same idempotency key won the race — return
+        // its event. Otherwise it was the UNIQUE(object_id, seq) backstop.
+        if (options.idempotencyKey !== undefined) {
           const seen = await this.#findByIdempotencyKey(options.idempotencyKey);
           if (seen !== null) return seen;
         }
-        // Otherwise it is the UNIQUE(object_id, seq) backstop — a lost seq race.
         throw new ConcurrencyError(objectId, options.expectedVersion ?? -1, -1);
       }
       throw error;
@@ -199,6 +204,9 @@ export class PostgresMark implements Mark {
     return events.length === 0 ? null : replay(events.map((r) => r.event));
   }
 
+  // NOTE: read/load/readCorrelation are unbounded — a very large object or case
+  // loads every row. Bounded/streamed reads (pagination) land with Layer 2; until
+  // then, configure a `statement_timeout` on the injected Pool as a DoS guard.
   async readCorrelation(correlationId: string): Promise<readonly RecordedEvent[]> {
     const { rows } = await this.pool.query<EventRow>(
       `SELECT ${EVENT_COLUMNS}
@@ -211,7 +219,7 @@ export class PostgresMark implements Mark {
   }
 
   async #loadWithin(client: PoolClient, objectId: string): Promise<ObjectState | null> {
-    const { rows } = await client.query<EventRow>(
+    const { rows } = await client.query<LoadRow>(
       `SELECT type, payload, schema_version FROM ${MARK_EVENTS_TABLE} WHERE object_id = $1 ORDER BY seq ASC`,
       [objectId],
     );
@@ -222,13 +230,4 @@ export class PostgresMark implements Mark {
 
 function isUniqueViolation(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "23505";
-}
-
-/** The name of the constraint/index a Postgres error violated, if any. */
-function violatedConstraint(error: unknown): string | undefined {
-  if (typeof error === "object" && error !== null && "constraint" in error) {
-    const { constraint } = error as { constraint?: unknown };
-    return typeof constraint === "string" ? constraint : undefined;
-  }
-  return undefined;
 }

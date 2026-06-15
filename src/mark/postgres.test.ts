@@ -136,6 +136,33 @@ describe.skipIf(!url)("PostgresMark", () => {
     expect(await mark.read("a")).toHaveLength(1);
   });
 
+  it("deduplicates a concurrent race on the same idempotency key (different objects)", async () => {
+    const [r1, r2] = await Promise.all([
+      mark.append("ra", { type: "ObjectCreated", id: "ra", objectType: "ticket" }, { idempotencyKey: "race" }),
+      mark.append("rb", { type: "ObjectCreated", id: "rb", objectType: "ticket" }, { idempotencyKey: "race" }),
+    ]);
+
+    // Both callers get the one event the winner recorded; only one row exists.
+    expect(r1.eventId).toBe(r2.eventId);
+    const { rows } = await pool.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM ${MARK_EVENTS_TABLE} WHERE idempotency_key = 'race'`,
+    );
+    expect(rows[0]!.n).toBe(1);
+  });
+
+  it("readCorrelation finds a pre-lineage row whose correlation_id is NULL (read as its own id)", async () => {
+    await pool.query(
+      `INSERT INTO ${MARK_EVENTS_TABLE} (object_id, seq, type, payload, metadata, occurred_at, event_id)
+       VALUES ($1, 1, 'ObjectCreated', $2, $3, now(), $4)`,
+      ["legacy-1", { id: "legacy-1", objectType: "ticket" }, { actor: "system" }, "legacy-event-id"],
+    );
+
+    const chain = await mark.readCorrelation("legacy-event-id");
+    expect(chain).toHaveLength(1);
+    expect(chain[0]!.eventId).toBe("legacy-event-id");
+    expect(chain[0]!.correlationId).toBe("legacy-event-id");
+  });
+
   it("records correlation/causation lineage and reconstructs a case across objects", async () => {
     const root = await mark.append("a", { type: "ObjectCreated", id: "a", objectType: "ticket" });
     expect(root.correlationId).toBe(root.eventId);
