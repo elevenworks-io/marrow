@@ -73,32 +73,53 @@ New variants added to the `MarkEvent` discriminated union (`event.ts`) with matc
 | `Escalated` | `{ reason }` | gate held: nothing released, awaits a human |
 | `OutcomeObserved` | `{ wasCorrect, evidence? }` | loop-closer (ADR-0010); appended by a separate human action, not automatically |
 
-**Projection — decision 2A (chosen for now).** `applyEvent`'s switch is exhaustive (the `never`
-arm makes an unhandled type a compile error), so the single generic projection must fold these.
-We extend `ObjectState` with **one generic, type-independent `decision` facet**:
+**Projection — 2B-lite (chosen).** The decision trace is a **separate projection from day one**,
+not a facet of `ObjectState`. The decisive reason: the decision trace is keyed by `correlationId`
+(the episode), while `ObjectState` is keyed by `objectId` — two different keys. Folding a
+`correlationId`-keyed thing into an `objectId`-keyed projection is concern-mixing, and ADR-0004 is
+explicit that cross-object read models are *separate, named projections* (the act loop folds
+per-object via `load`; everything else is its own projection). This slice is the first chance to
+build the second example of that world (after `list_objects`), so it should — not undercut the very
+architecture it exists to pressure-test.
 
-```
-decision?: {
-  status: "proposed" | "acted" | "escalated";
-  draft: string | null;        // the proposed reply, when acted
-  confidence: number | null;
-  episode: string;             // the run's correlationId
-  outcome?: { wasCorrect: boolean };
-}
-```
+Concretely:
 
-This keeps **one** projection (now aware of the agent's decision facet) and adds **no** complaint-
-specific fields — so it does not branch into a tree of per-domain types (respects §3.7 and the
-ADR-0005 rule that the single projection *generalizes*, never forks per domain). `get_object` then
-surfaces "a draft is pending / escalated" directly — real glass-box value.
+- **`ObjectState` stays field-clean** — no `decision` field is added. *Honest caveat:* because the
+  decision events live on the complaint's stream (Decision 5A), `applyEvent`'s exhaustive switch
+  **must** still handle them. They are folded as **pass-through arms that bump `version` but change
+  no domain field**. So `ObjectState` stays field-clean, but its `version` counts the decision
+  events too (they *are* events in the stream — this is correct and must be stated, not a surprise).
+- **A separate `replayDecision(events) → DecisionEpisode | null`** fold, keyed by `correlationId`:
+  ```
+  DecisionEpisode = {
+    episode: string;             // correlationId of the run
+    status: "proposed" | "acted" | "escalated";
+    draft: string | null;        // the proposed reply, when acted
+    confidence: number | null;
+    perceivedObjectId: string;
+    perceivedSeq: number;
+    outcome?: { wasCorrect: boolean };
+  }
+  ```
+  In-memory only, no persistence, no Layer-2 framework — the *same* fold logic 2A would have used,
+  just in its own function instead of inside `applyEvent`.
+- **The organ merges both reads.** `get_object`'s "a draft is pending / escalated" feature is the
+  organ reading `load(id)` **and** `replayDecision(read(id))` and combining them — the glass-box
+  value is preserved without loading up the core projection.
 
-**Evolution path 2A → 2B (recorded deferral, migration-free).** Later, a **separate decision-trace
-projection** (Layer-2 style) is the right home, leaving `ObjectState` clean. Because the events are
-the single source of truth, switching is purely a read-side change with **zero data migration** —
-exactly the ADR-0004 (rebuildable projections) / ADR-0005 payoff. **Trigger for 2B:** Layer 2
-(projection framework) exists **and** decision traces must be queried cross-object (e.g. "all
-escalations this week", or folding `ConfidenceAssessed` + `OutcomeObserved` into the per-action-type
-calibration curve of ADR-0010). Until then, the 2A facet + `get_history` carry it.
+**Evolution path 2B-lite → full 2B (recorded deferral, migration-free).** Later the same fold
+becomes a **persisted, cross-object** projection (folding `correlationId` across all object streams)
+once the Layer-2 framework exists. Because the events are the single source of truth, this is purely
+a read-side change with **zero data migration** (the ADR-0004 / ADR-0005 payoff). **Trigger:**
+Layer 2 exists **and** decision traces must be queried cross-object (e.g. "all escalations this
+week", or folding `ConfidenceAssessed` + `OutcomeObserved` into the per-action-type calibration
+curve of ADR-0010).
+
+**Schema + type-guard discipline (one step).** Adding the five variants to the `MarkEvent` union
+**forces** matching updates to `event-schema.ts` (a zod schema per variant) and the
+`Equal<MarkEvent, SchemaEvent>` compile guard, in the **same change** — `tsc` breaks otherwise. The
+plan must instruct: extend the union, the zod schemas, and the guard together; do not "fix" one side
+in isolation.
 
 ## 5. Control flow & resume
 
@@ -123,11 +144,17 @@ Written test-first, like the kernel; `load == replay(read)` must continue to hol
 in-memory and PostgreSQL adapters, including the new events.
 
 - **`gate` (pure):** above/below threshold; the T3 floor.
+- **`replayDecision` (pure fold):** the chain `DecisionProposed → ConfidenceAssessed → Acted` folds
+  to a `DecisionEpisode` with `status: "acted"` and `draft` set; the escalated chain folds to
+  `status: "escalated"` with `draft: null`; a stream with no decision events folds to `null`.
 - **`Cortex.run` — Acted path:** `FakeDecider` returns high confidence → chain
-  `DecisionProposed → ConfidenceAssessed → Acted`; `decision.draft` is projected; the intent is
-  recorded; **nothing is dispatched**.
+  `DecisionProposed → ConfidenceAssessed → Acted`; the intent is recorded; **nothing is dispatched**.
 - **`Cortex.run` — Escalated path:** `FakeDecider` returns low confidence → ends in `Escalated`;
-  no draft released; `decision.status === "escalated"`.
+  no draft released.
+- **`ObjectState` stays field-clean:** after a run, `load(id)` exposes **no** decision field; its
+  `version` has advanced by the number of decision events folded (pass-through bumps version only).
+- **Organ merge:** `get_object` combines `load(id)` + `replayDecision(read(id))` and surfaces
+  "draft pending / escalated".
 - **Replay determinism / idempotency:** a second `run` (retry) does **not** re-roll the LLM; appends
   are idempotent (no duplicate chain).
 - **`load == replay(read)`** holds on both adapters with the new event types folded.
@@ -147,8 +174,9 @@ Each returns when a workflow genuinely demands it:
 
 ## 8. Invariant check
 
-- **Events are truth; state derived.** ✅ The decision facet is folded from the new events; the
-  events are the only writes.
+- **Events are truth; state derived.** ✅ The `DecisionEpisode` is folded from the new events by a
+  separate projection; the events are the only writes. `ObjectState` stays field-clean (separation
+  of concerns — ADR-0004 "many named projections").
 - **Glass-box.** ✅ `DecisionProposed` records the proposal + perceived `seq`; `ConfidenceAssessed`
   records the gate inputs; the full episode is reconstructable from the Mark.
 - **Autonomy is gated.** ✅ T3 floor + threshold; below threshold escalates. High confidence never
