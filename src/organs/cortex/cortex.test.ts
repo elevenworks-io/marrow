@@ -5,6 +5,7 @@ import { describe, it, expect } from "vitest";
 import { InMemoryMark, type Mark } from "../../mark/index.js";
 import { Cortex } from "./cortex.js";
 import { FakeDecider } from "./decider.js";
+import { replayDecision } from "./decision.js";
 
 /** Seed a complaint object directly on the Mark (perception reads it). */
 async function seedComplaint(mark: Mark, text: string): Promise<string> {
@@ -76,6 +77,41 @@ describe("Cortex.run", () => {
 
     expect(lengthAfterSecond).toBe(lengthAfterFirst);
     expect(decider.calls).toBe(1);
+  });
+
+  it("resumes a partial run (crash after DecisionProposed) to a terminal state without re-rolling", async () => {
+    const mark = new InMemoryMark();
+    const id = await seedComplaint(mark, "interrupted");
+    const decider = new FakeDecider({ draft: "We're sorry…", confidence: 0.9 });
+
+    // Simulate a crash mid-run: only DecisionProposed got recorded.
+    const proposed = await mark.append(
+      id,
+      { type: "DecisionProposed", draft: "We're sorry…", perceivedObjectId: id, perceivedSeq: 2 },
+      { metadata: { actor: "cortex", confidence: 0.9 }, idempotencyKey: `decision:proposed:${id}` },
+    );
+    const partial = replayDecision(await mark.read(id));
+    expect(partial?.status).toBe("proposed");
+
+    // Resume: must complete the chain, reuse the recorded draft, never re-roll.
+    const episode = await new Cortex(mark, decider, { threshold: 0.8 }).run(id);
+
+    expect(episode.status).toBe("acted");
+    expect(episode.draft).toBe("We're sorry…");
+    expect(episode.confidence).toBe(0.9);
+    expect(decider.calls).toBe(0); // the model was NOT called on resume
+
+    const history = await mark.read(id);
+    expect(history.map((h) => h.event.type)).toEqual([
+      "ObjectCreated",
+      "AttributeSet",
+      "DecisionProposed",
+      "ConfidenceAssessed",
+      "Acted",
+    ]);
+    // Acted points at the original (pre-crash) proposed event — no duplicate proposal.
+    const acted = history.find((h) => h.event.type === "Acted");
+    expect(acted?.event).toEqual({ type: "Acted", draftRef: proposed.eventId });
   });
 
   it("keeps ObjectState field-clean: version counts decision events, no decision field", async () => {

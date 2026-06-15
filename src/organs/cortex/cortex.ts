@@ -42,27 +42,42 @@ export class Cortex {
   }
 
   /**
-   * Run the loop once for a complaint object. Idempotent: if a decision episode
-   * already exists, it is returned without calling the model again
-   * (memoization-in-the-small — the recorded result is the truth).
+   * Run the loop once for a complaint object. Idempotent and resumable
+   * (durable-by-default, §3): a *terminal* episode (acted | escalated) is
+   * returned without re-rolling the model — the recorded result is the truth.
+   * A *partial* episode (status "proposed" — e.g. a crash after DecisionProposed
+   * but before the chain completed) falls through and resumes: the per-event
+   * idempotency keys return the already-recorded events, so the run advances to
+   * a terminal state without duplicating the chain or re-calling the decider.
    */
   async run(complaintId: string): Promise<DecisionEpisode> {
-    const existing = replayDecision(await this.#mark.read(complaintId));
-    if (existing !== null) return existing;
+    const history = await this.#mark.read(complaintId);
+    const existing = replayDecision(history);
+    if (existing !== null && existing.status !== "proposed") return existing;
 
-    // Perceive.
-    const state = await this.#mark.load(complaintId);
-    if (state === null) {
-      throw new Error(`cannot perceive: object "${complaintId}" does not exist`);
+    // Obtain the proposal: reuse the already-recorded one on resume (never
+    // re-roll the model), otherwise perceive and ask the decider.
+    const recordedProposal = history.find((h) => h.event.type === "DecisionProposed");
+    let proposal: { draft: string; confidence: number };
+    let perceivedSeq: number;
+
+    if (recordedProposal !== undefined && recordedProposal.event.type === "DecisionProposed") {
+      proposal = {
+        draft: recordedProposal.event.draft,
+        confidence: recordedProposal.metadata.confidence ?? 0,
+      };
+      perceivedSeq = recordedProposal.event.perceivedSeq;
+    } else {
+      // Perceive.
+      const state = await this.#mark.load(complaintId);
+      if (state === null) {
+        throw new Error(`cannot perceive: object "${complaintId}" does not exist`);
+      }
+      const text = typeof state.attributes.text === "string" ? state.attributes.text : "";
+      // Decide (recorded as an event, so replay never re-rolls it).
+      proposal = await this.#decider.propose({ objectId: complaintId, seq: state.version, text });
+      perceivedSeq = state.version;
     }
-    const text = typeof state.attributes.text === "string" ? state.attributes.text : "";
-
-    // Decide (recorded as an event, so replay never re-rolls it).
-    const proposal = await this.#decider.propose({
-      objectId: complaintId,
-      seq: state.version,
-      text,
-    });
 
     const proposed = await this.#mark.append(
       complaintId,
@@ -70,7 +85,7 @@ export class Cortex {
         type: "DecisionProposed",
         draft: proposal.draft,
         perceivedObjectId: complaintId,
-        perceivedSeq: state.version,
+        perceivedSeq,
       },
       { metadata: this.#meta(proposal.confidence), idempotencyKey: `decision:proposed:${complaintId}` },
     );
