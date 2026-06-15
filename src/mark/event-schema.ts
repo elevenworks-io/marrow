@@ -31,6 +31,25 @@ export const markEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("AttributeSet"), key: z.string(), value: jsonSchema }).strict(),
   z.object({ type: z.literal("StateChanged"), state: z.string() }).strict(),
   z.object({ type: z.literal("NoteAdded"), text: z.string() }).strict(),
+  z.object({
+    type: z.literal("DecisionProposed"),
+    draft: z.string(),
+    perceivedObjectId: z.string(),
+    perceivedSeq: z.number(),
+  }).strict(),
+  z.object({
+    type: z.literal("ConfidenceAssessed"),
+    confidence: z.number(),
+    threshold: z.number(),
+    tier: z.enum(["T1", "T2", "T3", "T4"]),
+  }).strict(),
+  z.object({ type: z.literal("Acted"), draftRef: z.string() }).strict(),
+  z.object({ type: z.literal("Escalated"), reason: z.string() }).strict(),
+  z.object({
+    type: z.literal("OutcomeObserved"),
+    wasCorrect: z.boolean(),
+    evidence: z.string().nullable(),
+  }).strict(),
 ]);
 
 /**

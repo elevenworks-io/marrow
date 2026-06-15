@@ -7,7 +7,7 @@
  * to this. This barrel is the kernel's public surface.
  */
 
-export type { Json, MarkEvent, MarkEventType, EventMetadata, RecordedEvent } from "./event.js";
+export type { Json, MarkEvent, MarkEventType, EventMetadata, RecordedEvent, ActionTier } from "./event.js";
 export { type ObjectState, applyEvent, replay, ReplayError } from "./projection.js";
 export {
   markEventSchema,
