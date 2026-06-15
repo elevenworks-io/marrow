@@ -23,6 +23,7 @@ describe.skipIf(!url)("PostgresMark", () => {
 
   beforeEach(async () => {
     await pool.query(`DROP TABLE IF EXISTS ${MARK_EVENTS_TABLE} CASCADE`);
+    await pool.query(`DROP TABLE IF EXISTS schema_migrations CASCADE`);
     await migrate(pool);
     mark = new PostgresMark(pool);
   });
@@ -116,6 +117,101 @@ describe.skipIf(!url)("PostgresMark", () => {
     await expect(
       pool.query(`TRUNCATE ${MARK_EVENTS_TABLE}`),
     ).rejects.toThrow(/append-only/i);
+  });
+
+  it("deduplicates appends that carry the same idempotency key", async () => {
+    const first = await mark.append(
+      "a",
+      { type: "ObjectCreated", id: "a", objectType: "ticket" },
+      { idempotencyKey: "k1" },
+    );
+    const retry = await mark.append(
+      "a",
+      { type: "ObjectCreated", id: "a", objectType: "ticket" },
+      { idempotencyKey: "k1" },
+    );
+
+    expect(retry.eventId).toBe(first.eventId);
+    expect(retry.globalSeq).toBe(first.globalSeq);
+    expect(await mark.read("a")).toHaveLength(1);
+  });
+
+  it("scopes idempotency keys per object — the same key on different objects is two distinct events", async () => {
+    const [r1, r2] = await Promise.all([
+      mark.append("ra", { type: "ObjectCreated", id: "ra", objectType: "ticket" }, { idempotencyKey: "k" }),
+      mark.append("rb", { type: "ObjectCreated", id: "rb", objectType: "ticket" }, { idempotencyKey: "k" }),
+    ]);
+
+    expect(r1.eventId).not.toBe(r2.eventId);
+    const { rows } = await pool.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM ${MARK_EVENTS_TABLE} WHERE idempotency_key = 'k'`,
+    );
+    expect(rows[0]!.n).toBe(2);
+  });
+
+  it("deduplicates a concurrent retry to the same object", async () => {
+    const [r1, r2] = await Promise.all([
+      mark.append("rc", { type: "ObjectCreated", id: "rc", objectType: "ticket" }, { idempotencyKey: "k" }),
+      mark.append("rc", { type: "ObjectCreated", id: "rc", objectType: "ticket" }, { idempotencyKey: "k" }),
+    ]);
+
+    expect(r1.eventId).toBe(r2.eventId);
+    expect(await mark.read("rc")).toHaveLength(1);
+  });
+
+  it("readCorrelation finds a pre-lineage row whose correlation_id is NULL (read as its own id)", async () => {
+    await pool.query(
+      `INSERT INTO ${MARK_EVENTS_TABLE} (object_id, seq, type, payload, metadata, occurred_at, event_id)
+       VALUES ($1, 1, 'ObjectCreated', $2, $3, now(), $4)`,
+      ["legacy-1", { id: "legacy-1", objectType: "ticket" }, { actor: "system" }, "legacy-event-id"],
+    );
+
+    const chain = await mark.readCorrelation("legacy-event-id");
+    expect(chain).toHaveLength(1);
+    expect(chain[0]!.eventId).toBe("legacy-event-id");
+    expect(chain[0]!.correlationId).toBe("legacy-event-id");
+  });
+
+  it("records correlation/causation lineage and reconstructs a case across objects", async () => {
+    const root = await mark.append("a", { type: "ObjectCreated", id: "a", objectType: "ticket" });
+    expect(root.correlationId).toBe(root.eventId);
+    expect(root.causationId).toBeNull();
+
+    const other = await mark.append(
+      "b",
+      { type: "ObjectCreated", id: "b", objectType: "note" },
+      { causedBy: root },
+    );
+    await mark.append("a", { type: "NoteAdded", text: "linked" }, { causedBy: other });
+
+    expect(other.causationId).toBe(root.eventId);
+    expect(other.correlationId).toBe(root.correlationId);
+
+    const chain = await mark.readCorrelation(root.correlationId);
+    expect(chain.map((e) => e.objectId)).toEqual(["a", "b", "a"]);
+    expect(chain.every((e) => e.correlationId === root.correlationId)).toBe(true);
+  });
+
+  it("stamps the current schema version on append and round-trips it", async () => {
+    const recorded = await mark.append("v-1", {
+      type: "ObjectCreated",
+      id: "v-1",
+      objectType: "ticket",
+    });
+    expect(recorded.schemaVersion).toBe(1);
+
+    const [read] = await mark.read("v-1");
+    expect(read!.schemaVersion).toBe(1);
+  });
+
+  it("rejects a stored event whose schema version is newer than current (from the future)", async () => {
+    await pool.query(
+      `INSERT INTO ${MARK_EVENTS_TABLE} (object_id, seq, type, payload, metadata, occurred_at, schema_version)
+       VALUES ($1, 1, 'ObjectCreated', $2, $3, now(), $4)`,
+      ["future-1", { id: "future-1", objectType: "ticket" }, { actor: "system" }, 999],
+    );
+
+    await expect(mark.read("future-1")).rejects.toThrow();
   });
 
   it("rejects a stored event whose payload does not match its type (schema drift)", async () => {

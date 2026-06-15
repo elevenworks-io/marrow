@@ -3,8 +3,16 @@
 
 import { describe, it, expect } from "vitest";
 import type { z } from "zod";
-import type { MarkEvent } from "./event.js";
+import type { Json, MarkEvent } from "./event.js";
 import { markEventSchema, parseMarkEvent, parseEventMetadata } from "./event-schema.js";
+
+// Compile-time: every MarkEvent payload (the event minus `type`) is JSON, so the
+// Postgres adapter's toPayload() cast to Record<string, Json> can never silently
+// produce a non-JSON value (a future Date/branded field would break this).
+type PayloadOf<E> = E extends MarkEvent ? Omit<E, "type"> : never;
+type _PayloadIsJson = PayloadOf<MarkEvent> extends Record<string, Json> ? true : false;
+const _payloadIsJson: _PayloadIsJson = true;
+void _payloadIsJson;
 
 // --- Compile-time guard: the static type and the runtime schema cannot drift.
 // If a MarkEvent variant is added to one but not the other, z.infer and MarkEvent

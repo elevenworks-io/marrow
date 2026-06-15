@@ -14,69 +14,46 @@
  * is identical, only the durability changes.
  */
 
+import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import type { EventMetadata, Json, MarkEvent, RecordedEvent } from "./event.js";
 import { applyEvent, replay, type ObjectState } from "./projection.js";
-import { ConcurrencyError, type AppendOptions, type Mark } from "./log.js";
+import { ConcurrencyError, resolveLineage, type AppendOptions, type Mark } from "./log.js";
 import { parseMarkEvent, parseEventMetadata } from "./event-schema.js";
+import { migrate, MARK_EVENTS_TABLE } from "./migrations.js";
+import { currentVersion as currentSchemaVersion, upcastToCurrent, MARK_VERSIONS } from "./upcasting.js";
 
-export const MARK_EVENTS_TABLE = "mark_events";
+// The store's schema and migrations live in ./migrations.ts; re-exported here
+// so callers of the Postgres adapter keep a single import surface.
+export { migrate, MARK_EVENTS_TABLE };
 
 const DEFAULT_METADATA: EventMetadata = { actor: "system" };
-
-/** Idempotently create the append-only event store and its guards. */
-export async function migrate(pool: Pool): Promise<void> {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS ${MARK_EVENTS_TABLE} (
-      global_seq  BIGSERIAL PRIMARY KEY,
-      object_id   TEXT        NOT NULL,
-      seq         INTEGER     NOT NULL,
-      type        TEXT        NOT NULL,
-      payload     JSONB       NOT NULL,
-      metadata    JSONB       NOT NULL,
-      occurred_at TIMESTAMPTZ NOT NULL,
-      recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      UNIQUE (object_id, seq)
-    );
-
-    -- Row-level guard for UPDATE/DELETE. References only TG_OP, never NEW/OLD.
-    CREATE OR REPLACE FUNCTION ${MARK_EVENTS_TABLE}_no_mutate_fn()
-      RETURNS trigger AS $$
-      BEGIN
-        RAISE EXCEPTION 'the Mark is append-only: % on ${MARK_EVENTS_TABLE} is forbidden', TG_OP;
-      END;
-    $$ LANGUAGE plpgsql;
-
-    -- Separate statement-level guard for TRUNCATE: a statement-level trigger has
-    -- no NEW/OLD, so keeping its function distinct avoids a future footgun.
-    CREATE OR REPLACE FUNCTION ${MARK_EVENTS_TABLE}_no_truncate_fn()
-      RETURNS trigger AS $$
-      BEGIN
-        RAISE EXCEPTION 'the Mark is append-only: TRUNCATE on ${MARK_EVENTS_TABLE} is forbidden';
-      END;
-    $$ LANGUAGE plpgsql;
-
-    DROP TRIGGER IF EXISTS ${MARK_EVENTS_TABLE}_no_mutate ON ${MARK_EVENTS_TABLE};
-    CREATE TRIGGER ${MARK_EVENTS_TABLE}_no_mutate
-      BEFORE UPDATE OR DELETE ON ${MARK_EVENTS_TABLE}
-      FOR EACH ROW EXECUTE FUNCTION ${MARK_EVENTS_TABLE}_no_mutate_fn();
-
-    DROP TRIGGER IF EXISTS ${MARK_EVENTS_TABLE}_no_truncate ON ${MARK_EVENTS_TABLE};
-    CREATE TRIGGER ${MARK_EVENTS_TABLE}_no_truncate
-      BEFORE TRUNCATE ON ${MARK_EVENTS_TABLE}
-      FOR EACH STATEMENT EXECUTE FUNCTION ${MARK_EVENTS_TABLE}_no_truncate_fn();
-  `);
-}
 
 interface EventRow {
   global_seq: string; // bigint comes back as string from pg
   object_id: string;
   seq: number;
+  schema_version: number;
+  event_id: string;
+  correlation_id: string | null;
+  causation_id: string | null;
   type: string;
   payload: Record<string, Json>;
   metadata: unknown; // validated at the trust boundary, not trusted as-is
   occurred_at: Date;
   recorded_at: Date;
+}
+
+/** Columns selected for a full RecordedEvent, in one place. */
+const EVENT_COLUMNS =
+  "global_seq, object_id, seq, schema_version, event_id, correlation_id, causation_id, " +
+  "type, payload, metadata, occurred_at, recorded_at";
+
+/** The narrow row shape read during append's validation (only what folding needs). */
+interface LoadRow {
+  type: string;
+  schema_version: number;
+  payload: Record<string, Json>;
 }
 
 /** Split a domain event into its discriminant and the rest (the JSONB payload). */
@@ -85,22 +62,32 @@ function toPayload(event: MarkEvent): Record<string, Json> {
   return payload as Record<string, Json>;
 }
 
-/** Reconstruct a domain event from a stored row, validated against the schema. */
-function fromRow(type: string, payload: Record<string, Json>): MarkEvent {
-  // Validate the full event at this trust boundary: a malformed payload (schema
-  // drift, a direct SQL write) must be rejected, never folded into state.
-  return parseMarkEvent({ type, ...payload });
+/**
+ * Reconstruct a domain event from a stored row: lift it from its stored version
+ * to the current one (ADR-0003), then validate the result against the current
+ * schema. A malformed payload or a version from the future is rejected here,
+ * never folded into state.
+ */
+function fromRow(type: string, schemaVersion: number, payload: Record<string, Json>): MarkEvent {
+  const upcasted = upcastToCurrent(type, schemaVersion, payload, MARK_VERSIONS);
+  return parseMarkEvent({ type, ...upcasted });
 }
 
 function toRecorded(row: EventRow): RecordedEvent {
   return Object.freeze({
+    eventId: row.event_id,
+    // A NULL correlation_id means a pre-lineage root: it is its own correlation.
+    correlationId: row.correlation_id ?? row.event_id,
+    causationId: row.causation_id,
     // global_seq is a monotonic total-order token, NOT a gapless counter:
     // BIGSERIAL is non-transactional, so rejected appends leave gaps. Only its
     // ordering is meaningful. (Number() is exact below 2^53 — ~9e15 events.)
     globalSeq: Number(row.global_seq),
     objectId: row.object_id,
     seq: row.seq,
-    event: fromRow(row.type, row.payload),
+    // The in-memory event is upcast to current, so it conforms to current.
+    schemaVersion: currentSchemaVersion(row.type, MARK_VERSIONS),
+    event: fromRow(row.type, row.schema_version, row.payload),
     metadata: parseEventMetadata(row.metadata),
     occurredAt: row.occurred_at.toISOString(),
     recordedAt: row.recorded_at.toISOString(),
@@ -119,6 +106,12 @@ export class PostgresMark implements Mark {
       throw new Error(`ObjectCreated.id "${event.id}" must match the log key "${objectId}"`);
     }
 
+    // Fast path: a key already recorded for this object returns the original.
+    if (options.idempotencyKey !== undefined) {
+      const seen = await this.#findByKey(this.pool, objectId, options.idempotencyKey);
+      if (seen !== null) return seen;
+    }
+
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -131,11 +124,27 @@ export class PostgresMark implements Mark {
         [objectId],
       );
 
+      // Authoritative idempotency check, inside the lock: a concurrent retry to
+      // the same object that lost the race sees the winner's event here and
+      // returns it, rather than failing the projection validation below.
+      if (options.idempotencyKey !== undefined) {
+        const seen = await this.#findByKey(client, objectId, options.idempotencyKey);
+        if (seen !== null) {
+          await client.query("COMMIT");
+          return seen;
+        }
+      }
+
       const current = await this.#loadWithin(client, objectId);
       const currentVersion = current?.version ?? 0;
 
       if (options.expectedVersion !== undefined && options.expectedVersion !== currentVersion) {
-        throw new ConcurrencyError(objectId, options.expectedVersion, currentVersion);
+        throw new ConcurrencyError(
+          objectId,
+          `expected version ${options.expectedVersion}, found ${currentVersion}`,
+          options.expectedVersion,
+          currentVersion,
+        );
       }
 
       // Throws if the event is illegal for the object's current state.
@@ -143,21 +152,43 @@ export class PostgresMark implements Mark {
 
       const occurredAt = options.occurredAt ?? new Date().toISOString();
       const metadata = options.metadata ?? DEFAULT_METADATA;
+      const eventId = randomUUID();
+      const { correlationId, causationId } = resolveLineage(eventId, options.causedBy);
       const { rows } = await client.query<EventRow>(
         `INSERT INTO ${MARK_EVENTS_TABLE}
-           (object_id, seq, type, payload, metadata, occurred_at)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING global_seq, object_id, seq, type, payload, metadata, occurred_at, recorded_at`,
-        [objectId, currentVersion + 1, event.type, toPayload(event), metadata, occurredAt],
+           (object_id, seq, type, payload, metadata, occurred_at, schema_version,
+            event_id, correlation_id, causation_id, idempotency_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         RETURNING ${EVENT_COLUMNS}`,
+        [
+          objectId,
+          currentVersion + 1,
+          event.type,
+          toPayload(event),
+          metadata,
+          occurredAt,
+          currentSchemaVersion(event.type, MARK_VERSIONS),
+          eventId,
+          correlationId,
+          causationId,
+          options.idempotencyKey ?? null,
+        ],
       );
 
       await client.query("COMMIT");
       return toRecorded(rows[0]!);
     } catch (error) {
       await client.query("ROLLBACK");
-      // UNIQUE(object_id, seq) backstop: a lost race on seq is a concurrency conflict.
       if (isUniqueViolation(error)) {
-        throw new ConcurrencyError(objectId, options.expectedVersion ?? -1, -1);
+        // Decide by data, not by constraint name (which the pg driver does not
+        // populate reliably for partial indexes). A backstop for the narrow
+        // window the in-lock recheck doesn't cover: if our (object, key) is now
+        // present, a concurrent retry won — return its event.
+        if (options.idempotencyKey !== undefined) {
+          const seen = await this.#findByKey(this.pool, objectId, options.idempotencyKey);
+          if (seen !== null) return seen;
+        }
+        throw new ConcurrencyError(objectId, "a concurrent write advanced the object");
       }
       throw error;
     } finally {
@@ -165,9 +196,22 @@ export class PostgresMark implements Mark {
     }
   }
 
+  /** Find the event recorded for an (object, idempotency key), or null. */
+  async #findByKey(
+    executor: Pool | PoolClient,
+    objectId: string,
+    key: string,
+  ): Promise<RecordedEvent | null> {
+    const { rows } = await executor.query<EventRow>(
+      `SELECT ${EVENT_COLUMNS} FROM ${MARK_EVENTS_TABLE} WHERE object_id = $1 AND idempotency_key = $2`,
+      [objectId, key],
+    );
+    return rows.length === 0 ? null : toRecorded(rows[0]!);
+  }
+
   async read(objectId: string): Promise<readonly RecordedEvent[]> {
     const { rows } = await this.pool.query<EventRow>(
-      `SELECT global_seq, object_id, seq, type, payload, metadata, occurred_at, recorded_at
+      `SELECT ${EVENT_COLUMNS}
          FROM ${MARK_EVENTS_TABLE}
         WHERE object_id = $1
         ORDER BY seq ASC`,
@@ -181,13 +225,27 @@ export class PostgresMark implements Mark {
     return events.length === 0 ? null : replay(events.map((r) => r.event));
   }
 
+  // NOTE: read/load/readCorrelation are unbounded — a very large object or case
+  // loads every row. Bounded/streamed reads (pagination) land with Layer 2; until
+  // then, configure a `statement_timeout` on the injected Pool as a DoS guard.
+  async readCorrelation(correlationId: string): Promise<readonly RecordedEvent[]> {
+    const { rows } = await this.pool.query<EventRow>(
+      `SELECT ${EVENT_COLUMNS}
+         FROM ${MARK_EVENTS_TABLE}
+        WHERE correlation_id = $1 OR (correlation_id IS NULL AND event_id = $1)
+        ORDER BY global_seq ASC`,
+      [correlationId],
+    );
+    return rows.map(toRecorded);
+  }
+
   async #loadWithin(client: PoolClient, objectId: string): Promise<ObjectState | null> {
-    const { rows } = await client.query<EventRow>(
-      `SELECT type, payload FROM ${MARK_EVENTS_TABLE} WHERE object_id = $1 ORDER BY seq ASC`,
+    const { rows } = await client.query<LoadRow>(
+      `SELECT type, payload, schema_version FROM ${MARK_EVENTS_TABLE} WHERE object_id = $1 ORDER BY seq ASC`,
       [objectId],
     );
     if (rows.length === 0) return null;
-    return replay(rows.map((r) => fromRow(r.type, r.payload)));
+    return replay(rows.map((r) => fromRow(r.type, r.schema_version, r.payload)));
   }
 }
 
