@@ -162,6 +162,19 @@ sequence.
   cheap-tier config; confidence stays a placeholder; no router (ADR-0011). Tests
   never touch the network. Spec:
   `docs/superpowers/specs/2026-06-15-decider-adapters-design.md`.
+- **Lens 0 (trace view) — done.** The first step of Lens, the Mark-native
+  observability organ (`src/organs/lens/`) — our own small, tailored,
+  Langfuse-*inspired* layer, never external Langfuse. `replayTrace` folds an
+  event stream into a causal forest (keyed by causationId, objectId-agnostic);
+  `summarizeEpisodes` derives an audit-rich summary per decision correlationId
+  (reusing the Cortex `replayDecision`, restoring threshold/tier/draft/perceived/
+  evidence that it drops); `renderTrace` makes the "why" legible (gate verdict,
+  draft, perceived context, escalation reason, outcome). A pure read-only
+  projection — no second source of truth, the trace **is** the events
+  (ADR-0009/0004). Timing deferred to Lens 1 (a recorded Δ would misread as model
+  latency). `npm run lens`. Specs/plan:
+  `docs/superpowers/specs/2026-06-15-lens-0-trace-view-design.md`,
+  `docs/superpowers/plans/2026-06-15-lens-0-trace-view.md`.
 - **Layer 2 / schema-morph — decided** (ADR-0004 / 0005), not yet built.
 - **Layers 3a, 3b, 4 and cross-cutting — *provisional*** (ADR-0007–0011), held
   loosely pending what the slice and the Cortex reveal.
@@ -223,6 +236,16 @@ What the first acting agent teaches (fill from real runs — the slice's purpose
   self-hosted observability adapter behind a seam* — never authoritative, Mark
   stays the single source of truth. Record the choice as its own ADR; do **not**
   bolt it on before then (§3.8).
+- **The trace is a forest of short chains today, not a deep tree (Lens 0).**
+  Building the trace view confirmed the only fan-out the codebase produces is
+  `ObjectCreated → N×AttributeSet`; the decision chain is a straight line, and
+  cross-object causation is still unthreaded — so `externalCause` only fires on a
+  deliberately *sliced* read (a glass-box "this trace is partial" signal), never
+  on whole-object data. The value of the trace view is the **legibility** of the
+  gate decision, draft, perceived context and outcome — not graph structure. Keeps
+  the cross-object "case" question open for the Cortex (ADR-0009). Also: the Cortex
+  never appends `OutcomeObserved`, so an episode's outcome reads "—" until the
+  calibration loop (Lens 2) closes it.
 - _(still open:)_ Does the version-only pass-through (decision events bump
   `ObjectState.version`) confuse consumers, or is it honest? When does 2B-lite →
   full 2B pull (the calibration-curve query)? What does a real EU/on-prem adapter
