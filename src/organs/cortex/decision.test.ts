@@ -39,6 +39,7 @@ describe("replayDecision", () => {
       perceivedObjectId: "c1",
       perceivedSeq: 1,
     });
+    expect(Object.isFrozen(episode)).toBe(true);
   });
 
   it("folds the escalated chain with no released draft", () => {
