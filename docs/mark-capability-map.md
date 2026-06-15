@@ -152,6 +152,16 @@ sequence.
   *intent* with no dispatcher. Puts the provisional ADRs 0007/0009/0010 under
   real, agent-produced pressure. Spec:
   `docs/superpowers/specs/2026-06-15-cortex-slice-design.md`.
+- **Decider adapters (Anthropic + OpenAI) — done.** Two concrete deciders behind
+  the existing `Decider` seam (the slice shipped it fake-only), plus a standalone
+  `compareDeciders` A/B harness and a `cortex:ab` demo. Proves §3.5 concretely: a
+  vendor is one adapter file, zero core changes — a **containment test** enforces
+  that no Cortex-core file imports a vendor SDK. Anthropic uses forced tool-use
+  (kernel is zod v3; the SDK's `zodOutputFormat` is zod v4), OpenAI uses
+  `zodResponseFormat`; both validate against one shared proposal schema. Model is
+  cheap-tier config; confidence stays a placeholder; no router (ADR-0011). Tests
+  never touch the network. Spec:
+  `docs/superpowers/specs/2026-06-15-decider-adapters-design.md`.
 - **Layer 2 / schema-morph — decided** (ADR-0004 / 0005), not yet built.
 - **Layers 3a, 3b, 4 and cross-cutting — *provisional*** (ADR-0007–0011), held
   loosely pending what the slice and the Cortex reveal.
