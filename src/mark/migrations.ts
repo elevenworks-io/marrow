@@ -83,8 +83,35 @@ const m0002_event_schema_version: Migration = {
   },
 };
 
+/**
+ * Migration 3 — causal lineage (ADR-0009 glass-box chains). `event_id` is the
+ * stable per-event anchor (existing rows get a generated uuid). `correlation_id`
+ * and `causation_id` are nullable: a NULL correlation is read as the event's own
+ * id (a root), so no backfill UPDATE is needed — which the append-only trigger
+ * would forbid anyway.
+ */
+const m0003_event_lineage: Migration = {
+  version: 3,
+  name: "event_lineage",
+  async up(client) {
+    await client.query(`
+      ALTER TABLE ${MARK_EVENTS_TABLE}
+        ADD COLUMN event_id       TEXT NOT NULL DEFAULT gen_random_uuid()::text,
+        ADD COLUMN correlation_id TEXT,
+        ADD COLUMN causation_id   TEXT;
+
+      CREATE INDEX ${MARK_EVENTS_TABLE}_correlation_idx ON ${MARK_EVENTS_TABLE} (correlation_id);
+      CREATE INDEX ${MARK_EVENTS_TABLE}_causation_idx   ON ${MARK_EVENTS_TABLE} (causation_id);
+    `);
+  },
+};
+
 /** The ordered migration list. Append new migrations; never edit shipped ones. */
-export const MIGRATIONS: readonly Migration[] = [m0001_kernel, m0002_event_schema_version];
+export const MIGRATIONS: readonly Migration[] = [
+  m0001_kernel,
+  m0002_event_schema_version,
+  m0003_event_lineage,
+];
 
 /**
  * Apply all pending migrations in version order. Each runs in its own

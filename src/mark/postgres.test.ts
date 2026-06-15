@@ -119,6 +119,26 @@ describe.skipIf(!url)("PostgresMark", () => {
     ).rejects.toThrow(/append-only/i);
   });
 
+  it("records correlation/causation lineage and reconstructs a case across objects", async () => {
+    const root = await mark.append("a", { type: "ObjectCreated", id: "a", objectType: "ticket" });
+    expect(root.correlationId).toBe(root.eventId);
+    expect(root.causationId).toBeNull();
+
+    const other = await mark.append(
+      "b",
+      { type: "ObjectCreated", id: "b", objectType: "note" },
+      { causedBy: root },
+    );
+    await mark.append("a", { type: "NoteAdded", text: "linked" }, { causedBy: other });
+
+    expect(other.causationId).toBe(root.eventId);
+    expect(other.correlationId).toBe(root.correlationId);
+
+    const chain = await mark.readCorrelation(root.correlationId);
+    expect(chain.map((e) => e.objectId)).toEqual(["a", "b", "a"]);
+    expect(chain.every((e) => e.correlationId === root.correlationId)).toBe(true);
+  });
+
   it("stamps the current schema version on append and round-trips it", async () => {
     const recorded = await mark.append("v-1", {
       type: "ObjectCreated",

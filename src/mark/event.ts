@@ -54,6 +54,13 @@ export interface EventMetadata {
  * append, never by the caller.
  */
 export interface RecordedEvent {
+  /** Stable, unique id of this event — the anchor for causal lineage. */
+  readonly eventId: string;
+  /** The root that ties a whole decision chain ("case") together. A root event
+   *  is its own correlation. */
+  readonly correlationId: string;
+  /** The event that directly caused this one; `null` for a root event. */
+  readonly causationId: string | null;
   readonly globalSeq: number;
   readonly objectId: string;
   readonly seq: number;

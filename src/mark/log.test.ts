@@ -118,6 +118,47 @@ describe("InMemoryMark", () => {
     expect(ok.seq).toBe(2);
   });
 
+  it("a root event is its own correlation and has no causation", async () => {
+    const mark = new InMemoryMark();
+    const root = await mark.append("a", { type: "ObjectCreated", id: "a", objectType: "ticket" });
+
+    expect(typeof root.eventId).toBe("string");
+    expect(root.eventId.length).toBeGreaterThan(0);
+    expect(root.correlationId).toBe(root.eventId);
+    expect(root.causationId).toBeNull();
+  });
+
+  it("a caused event inherits the correlation and points causation at its cause", async () => {
+    const mark = new InMemoryMark();
+    const root = await mark.append("a", { type: "ObjectCreated", id: "a", objectType: "ticket" });
+    const child = await mark.append(
+      "a",
+      { type: "StateChanged", state: "open" },
+      { causedBy: root },
+    );
+
+    expect(child.causationId).toBe(root.eventId);
+    expect(child.correlationId).toBe(root.correlationId);
+    expect(child.eventId).not.toBe(root.eventId);
+  });
+
+  it("readCorrelation returns every event of a case across objects, in global order", async () => {
+    const mark = new InMemoryMark();
+    const root = await mark.append("a", { type: "ObjectCreated", id: "a", objectType: "ticket" });
+    const other = await mark.append(
+      "b",
+      { type: "ObjectCreated", id: "b", objectType: "note" },
+      { causedBy: root },
+    );
+    await mark.append("a", { type: "NoteAdded", text: "linked" }, { causedBy: other });
+
+    const chain = await mark.readCorrelation(root.correlationId);
+
+    expect(chain.map((e) => e.objectId)).toEqual(["a", "b", "a"]);
+    expect(chain.map((e) => e.globalSeq)).toEqual([...chain.map((e) => e.globalSeq)].sort((x, y) => x - y));
+    expect(chain.every((e) => e.correlationId === root.correlationId)).toBe(true);
+  });
+
   it("stamps the current schema version on recorded events", async () => {
     const mark = new InMemoryMark();
     const recorded = await mark.append("obj-1", {

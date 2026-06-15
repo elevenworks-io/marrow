@@ -15,9 +15,27 @@
  * contract against an append-only table.
  */
 
+import { randomUUID } from "node:crypto";
 import type { EventMetadata, MarkEvent, RecordedEvent } from "./event.js";
 import { applyEvent, replay, type ObjectState } from "./projection.js";
 import { currentVersion as currentSchemaVersion, MARK_VERSIONS } from "./upcasting.js";
+
+/** The causing event of an append — enough to inherit its lineage. */
+export interface CausedBy {
+  readonly eventId: string;
+  readonly correlationId: string;
+}
+
+/** Resolve an event's lineage: a caused event inherits the correlation and
+ *  points causation at its cause; a root event is its own correlation. */
+export function resolveLineage(
+  eventId: string,
+  causedBy: CausedBy | undefined,
+): { correlationId: string; causationId: string | null } {
+  return causedBy
+    ? { correlationId: causedBy.correlationId, causationId: causedBy.eventId }
+    : { correlationId: eventId, causationId: null };
+}
 
 /** Raised when an append's `expectedVersion` does not match current version. */
 export class ConcurrencyError extends Error {
@@ -44,6 +62,8 @@ export interface AppendOptions {
   readonly expectedVersion?: number;
   /** When the event actually happened, if not "now" (ISO 8601). */
   readonly occurredAt?: string;
+  /** The event that caused this one — its lineage is inherited (glass-box). */
+  readonly causedBy?: CausedBy;
 }
 
 /** The append-only event log. */
@@ -51,6 +71,9 @@ export interface Mark {
   append(objectId: string, event: MarkEvent, options?: AppendOptions): Promise<RecordedEvent>;
   read(objectId: string): Promise<readonly RecordedEvent[]>;
   load(objectId: string): Promise<ObjectState | null>;
+  /** Every event of a case (shared correlation), in global order — the chain
+   *  that reconstructs *why* (ADR-0009). */
+  readCorrelation(correlationId: string): Promise<readonly RecordedEvent[]>;
 }
 
 const DEFAULT_METADATA: EventMetadata = { actor: "system" };
@@ -58,6 +81,7 @@ const DEFAULT_METADATA: EventMetadata = { actor: "system" };
 /** In-memory reference implementation of the Mark. */
 export class InMemoryMark implements Mark {
   readonly #byObject = new Map<string, RecordedEvent[]>();
+  readonly #log: RecordedEvent[] = [];
   #globalSeq = 0;
 
   async append(
@@ -83,7 +107,12 @@ export class InMemoryMark implements Mark {
     // the object's current state (e.g. created twice, or mutated before created).
     applyEvent(current, event);
 
+    const eventId = randomUUID();
+    const { correlationId, causationId } = resolveLineage(eventId, options.causedBy);
     const recorded: RecordedEvent = Object.freeze({
+      eventId,
+      correlationId,
+      causationId,
       globalSeq: ++this.#globalSeq,
       objectId,
       seq: currentVersion + 1,
@@ -102,6 +131,7 @@ export class InMemoryMark implements Mark {
       this.#byObject.set(objectId, stored);
     }
     stored.push(recorded);
+    this.#log.push(recorded);
     return recorded;
   }
 
@@ -115,6 +145,11 @@ export class InMemoryMark implements Mark {
       return null;
     }
     return replay(events.map((r) => r.event));
+  }
+
+  async readCorrelation(correlationId: string): Promise<readonly RecordedEvent[]> {
+    // #log is already in global (append) order.
+    return this.#log.filter((r) => r.correlationId === correlationId);
   }
 }
 

@@ -14,10 +14,11 @@
  * is identical, only the durability changes.
  */
 
+import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import type { EventMetadata, Json, MarkEvent, RecordedEvent } from "./event.js";
 import { applyEvent, replay, type ObjectState } from "./projection.js";
-import { ConcurrencyError, type AppendOptions, type Mark } from "./log.js";
+import { ConcurrencyError, resolveLineage, type AppendOptions, type Mark } from "./log.js";
 import { parseMarkEvent, parseEventMetadata } from "./event-schema.js";
 import { migrate, MARK_EVENTS_TABLE } from "./migrations.js";
 import { currentVersion as currentSchemaVersion, upcastToCurrent, MARK_VERSIONS } from "./upcasting.js";
@@ -33,12 +34,20 @@ interface EventRow {
   object_id: string;
   seq: number;
   schema_version: number;
+  event_id: string;
+  correlation_id: string | null;
+  causation_id: string | null;
   type: string;
   payload: Record<string, Json>;
   metadata: unknown; // validated at the trust boundary, not trusted as-is
   occurred_at: Date;
   recorded_at: Date;
 }
+
+/** Columns selected for a full RecordedEvent, in one place. */
+const EVENT_COLUMNS =
+  "global_seq, object_id, seq, schema_version, event_id, correlation_id, causation_id, " +
+  "type, payload, metadata, occurred_at, recorded_at";
 
 /** Split a domain event into its discriminant and the rest (the JSONB payload). */
 function toPayload(event: MarkEvent): Record<string, Json> {
@@ -59,6 +68,10 @@ function fromRow(type: string, schemaVersion: number, payload: Record<string, Js
 
 function toRecorded(row: EventRow): RecordedEvent {
   return Object.freeze({
+    eventId: row.event_id,
+    // A NULL correlation_id means a pre-lineage root: it is its own correlation.
+    correlationId: row.correlation_id ?? row.event_id,
+    causationId: row.causation_id,
     // global_seq is a monotonic total-order token, NOT a gapless counter:
     // BIGSERIAL is non-transactional, so rejected appends leave gaps. Only its
     // ordering is meaningful. (Number() is exact below 2^53 — ~9e15 events.)
@@ -110,11 +123,14 @@ export class PostgresMark implements Mark {
 
       const occurredAt = options.occurredAt ?? new Date().toISOString();
       const metadata = options.metadata ?? DEFAULT_METADATA;
+      const eventId = randomUUID();
+      const { correlationId, causationId } = resolveLineage(eventId, options.causedBy);
       const { rows } = await client.query<EventRow>(
         `INSERT INTO ${MARK_EVENTS_TABLE}
-           (object_id, seq, type, payload, metadata, occurred_at, schema_version)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING global_seq, object_id, seq, schema_version, type, payload, metadata, occurred_at, recorded_at`,
+           (object_id, seq, type, payload, metadata, occurred_at, schema_version,
+            event_id, correlation_id, causation_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING ${EVENT_COLUMNS}`,
         [
           objectId,
           currentVersion + 1,
@@ -123,6 +139,9 @@ export class PostgresMark implements Mark {
           metadata,
           occurredAt,
           currentSchemaVersion(event.type, MARK_VERSIONS),
+          eventId,
+          correlationId,
+          causationId,
         ],
       );
 
@@ -142,7 +161,7 @@ export class PostgresMark implements Mark {
 
   async read(objectId: string): Promise<readonly RecordedEvent[]> {
     const { rows } = await this.pool.query<EventRow>(
-      `SELECT global_seq, object_id, seq, schema_version, type, payload, metadata, occurred_at, recorded_at
+      `SELECT ${EVENT_COLUMNS}
          FROM ${MARK_EVENTS_TABLE}
         WHERE object_id = $1
         ORDER BY seq ASC`,
@@ -154,6 +173,17 @@ export class PostgresMark implements Mark {
   async load(objectId: string): Promise<ObjectState | null> {
     const events = await this.read(objectId);
     return events.length === 0 ? null : replay(events.map((r) => r.event));
+  }
+
+  async readCorrelation(correlationId: string): Promise<readonly RecordedEvent[]> {
+    const { rows } = await this.pool.query<EventRow>(
+      `SELECT ${EVENT_COLUMNS}
+         FROM ${MARK_EVENTS_TABLE}
+        WHERE correlation_id = $1 OR (correlation_id IS NULL AND event_id = $1)
+        ORDER BY global_seq ASC`,
+      [correlationId],
+    );
+    return rows.map(toRecorded);
   }
 
   async #loadWithin(client: PoolClient, objectId: string): Promise<ObjectState | null> {

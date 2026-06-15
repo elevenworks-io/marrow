@@ -15,7 +15,14 @@ export {
   eventMetadataSchema,
   parseEventMetadata,
 } from "./event-schema.js";
-export { type Mark, type AppendOptions, InMemoryMark, ConcurrencyError } from "./log.js";
+export {
+  type Mark,
+  type AppendOptions,
+  type CausedBy,
+  resolveLineage,
+  InMemoryMark,
+  ConcurrencyError,
+} from "./log.js";
 export { PostgresMark, migrate, MARK_EVENTS_TABLE } from "./postgres.js";
 export {
   type Migration,
