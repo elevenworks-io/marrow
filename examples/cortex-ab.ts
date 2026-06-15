@@ -6,7 +6,8 @@
  * OpenAI deciders and print both drafts, their self-reported confidence, and
  * what the gate (tier T3) would decide for each — side by side.
  *
- *   ANTHROPIC_API_KEY=… OPENAI_API_KEY=… MARROW_CORTEX_OPENAI_MODEL=… npm run cortex:ab
+ *   cp .env.example .env   # then fill in the keys
+ *   npm run cortex:ab      # loads .env automatically (dotenv)
  *
  * This one DOES call real models (that's the point). Without the keys below it
  * prints what to set and exits — it never makes an unconfigured call. The two
@@ -14,6 +15,7 @@
  * one more entry here and one more adapter file — nothing else changes.
  */
 
+import "dotenv/config"; // load .env (gitignored) so keys/model come from there
 import {
   AnthropicDecider,
   OpenAIDecider,
