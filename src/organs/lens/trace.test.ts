@@ -79,9 +79,7 @@ describe("replayTrace", () => {
       rec({ eventId: "a", globalSeq: 2, correlationId: "p", causationId: "p", event: { type: "ConfidenceAssessed", confidence: 0.9, threshold: 0.8, tier: "T3" } }),
       rec({ eventId: "x", globalSeq: 3, correlationId: "p", causationId: "a", event: { type: "Acted", draftRef: "p" } }),
     ];
-    const inOrder = JSON.stringify(replayTrace(events));
-    const shuffled = JSON.stringify(replayTrace([events[2]!, events[0]!, events[1]!]));
-    expect(shuffled).toBe(inOrder);
+    expect(replayTrace([events[2]!, events[0]!, events[1]!])).toEqual(replayTrace(events));
   });
 
   it("merges a cross-object causal edge into one tree (objectId-agnostic)", () => {

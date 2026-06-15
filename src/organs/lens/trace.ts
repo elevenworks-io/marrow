@@ -67,9 +67,11 @@ export interface TraceNode {
 export type TraceForest = readonly TraceNode[];
 
 /** Mutable builder mirror of TraceNode (children grow during the fold). */
-type Building = Omit<TraceNode, "children" | "externalCause"> & {
+type Building = Omit<TraceNode, "children" | "externalCause" | "confidence" | "tier"> & {
   children: Building[];
   externalCause?: string;
+  confidence?: number;
+  tier?: ActionTier;
 };
 
 /** Total order on a single Mark: globalSeq is unique; eventId is tiebreak
@@ -94,17 +96,21 @@ function toNode(r: RecordedEvent): Building {
     metadata: r.metadata,
     children: [],
   };
-  const confidence = e.type === "ConfidenceAssessed" ? e.confidence : r.metadata.confidence;
-  if (confidence !== undefined) (node as { confidence?: number }).confidence = confidence;
-  if (e.type === "ConfidenceAssessed") (node as { tier?: ActionTier }).tier = e.tier;
+  if (e.type === "ConfidenceAssessed") {
+    node.confidence = e.confidence;
+    node.tier = e.tier;
+  } else if (r.metadata.confidence !== undefined) {
+    node.confidence = r.metadata.confidence;
+  }
   return node;
 }
 
 /**
  * Fold an event stream into a causal forest. Roots are events with no cause, or
  * with a `causationId` that dangles outside the set (flagged `externalCause` —
- * forward-looking; today's data never produces it). Pure and order-independent:
- * shuffle the input, get an identical forest.
+ * occurs whenever the caller passes an incomplete slice of the Mark, e.g. a
+ * paged or filtered read). Pure and order-independent: shuffle the input, get
+ * an identical forest.
  */
 export function replayTrace(events: readonly RecordedEvent[]): TraceForest {
   const sorted = [...events].sort(byOrder);
@@ -118,7 +124,8 @@ export function replayTrace(events: readonly RecordedEvent[]): TraceForest {
 
   const roots: Building[] = [];
   for (const r of sorted) {
-    const node = map.get(r.eventId) as Building;
+    const node = map.get(r.eventId);
+    if (node === undefined) throw new Error(`invariant: node missing for "${r.eventId}"`);
     if (r.causationId === null) {
       roots.push(node);
       continue;
@@ -132,7 +139,9 @@ export function replayTrace(events: readonly RecordedEvent[]): TraceForest {
     }
   }
 
-  for (const node of map.values()) node.children.sort(byOrder);
+  for (const node of map.values()) {
+    if (node.children.length > 0) node.children.sort(byOrder);
+  }
   roots.sort(byOrder);
   return roots as unknown as TraceForest;
 }
