@@ -115,6 +115,11 @@ sequence; the decisions are settled.
 | L2 — projections | [ADR-0004](adr/0004-projections-async-first.md) | Async-first projections; per-object authoritative reads stay strongly consistent |
 | Schema-morph | [ADR-0005](adr/0005-schema-morph.md) | Schema as events; object types as projections; borrow Zammad's wisdom, invert its DDL mechanism |
 | Vertical slice | [ADR-0006](adr/0006-first-organ-mcp-vertical-slice.md) | First organ = expose the Mark over MCP; dogfood; pulls minimal L2 |
+| L3a — durable execution | [ADR-0007](adr/0007-durable-execution.md) | Explicit-checkpoint journal on the Mark; outbox + SKIP LOCKED timers; DBOS only at the control-plane trigger, never Temporal early |
+| L3b — memory | [ADR-0008](adr/0008-memory-as-projection.md) | Mark = episodic memory; semantic retrieval as a rebuildable pgvector projection; nightly consolidation appends derived events, never truth |
+| L4 — Time Machine & audit | [ADR-0009](adr/0009-time-machine-and-audit.md) | As-of replay (bitemporal) first; true branching deferred; audit falls out of correlation ids + metadata |
+| Confidence-gated autonomy | [ADR-0010](adr/0010-confidence-gated-autonomy.md) | Action-tier floor + empirical confidence; "confidence ≠ permission"; decision chain as events incl. OutcomeObserved |
+| Integrity & sovereignty | [ADR-0011](adr/0011-integrity-and-sovereignty.md) | Hash-chain + signed digest; crypto-shredding for GDPR erasure; model-agnostic EU/on-prem inference |
 
 ## Status
 
@@ -128,5 +133,6 @@ sequence; the decisions are settled.
   layer is built.
 - **Layers 2 / schema-morph / vertical slice — decided** (ADR-0004 / 0005 /
   0006), sequenced after Layer 1.
-- **Layers 3a, 3b, 4 and the cross-cutting concerns — open.** Direction not yet
-  researched; to be analysed and recorded as their own ADRs next.
+- **Layers 3a, 3b, 4 and the cross-cutting concerns — decided**
+  (ADR-0007 / 0008 / 0009 / 0010 / 0011). Researched and recorded; implementation
+  follows the layer sequence. Every Mark capability now has a settled direction.
