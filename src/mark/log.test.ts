@@ -136,6 +136,14 @@ describe("InMemoryMark", () => {
     expect(await mark.read("a")).toHaveLength(1);
   });
 
+  it("scopes idempotency keys per object — the same key on different objects is distinct", async () => {
+    const mark = new InMemoryMark();
+    const a = await mark.append("a", { type: "ObjectCreated", id: "a", objectType: "ticket" }, { idempotencyKey: "k" });
+    const b = await mark.append("b", { type: "ObjectCreated", id: "b", objectType: "ticket" }, { idempotencyKey: "k" });
+
+    expect(a.eventId).not.toBe(b.eventId);
+  });
+
   it("treats different idempotency keys as distinct appends", async () => {
     const mark = new InMemoryMark();
     await mark.append(

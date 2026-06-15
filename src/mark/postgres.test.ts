@@ -136,18 +136,27 @@ describe.skipIf(!url)("PostgresMark", () => {
     expect(await mark.read("a")).toHaveLength(1);
   });
 
-  it("deduplicates a concurrent race on the same idempotency key (different objects)", async () => {
+  it("scopes idempotency keys per object — the same key on different objects is two distinct events", async () => {
     const [r1, r2] = await Promise.all([
-      mark.append("ra", { type: "ObjectCreated", id: "ra", objectType: "ticket" }, { idempotencyKey: "race" }),
-      mark.append("rb", { type: "ObjectCreated", id: "rb", objectType: "ticket" }, { idempotencyKey: "race" }),
+      mark.append("ra", { type: "ObjectCreated", id: "ra", objectType: "ticket" }, { idempotencyKey: "k" }),
+      mark.append("rb", { type: "ObjectCreated", id: "rb", objectType: "ticket" }, { idempotencyKey: "k" }),
     ]);
 
-    // Both callers get the one event the winner recorded; only one row exists.
-    expect(r1.eventId).toBe(r2.eventId);
+    expect(r1.eventId).not.toBe(r2.eventId);
     const { rows } = await pool.query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM ${MARK_EVENTS_TABLE} WHERE idempotency_key = 'race'`,
+      `SELECT count(*)::int AS n FROM ${MARK_EVENTS_TABLE} WHERE idempotency_key = 'k'`,
     );
-    expect(rows[0]!.n).toBe(1);
+    expect(rows[0]!.n).toBe(2);
+  });
+
+  it("deduplicates a concurrent retry to the same object", async () => {
+    const [r1, r2] = await Promise.all([
+      mark.append("rc", { type: "ObjectCreated", id: "rc", objectType: "ticket" }, { idempotencyKey: "k" }),
+      mark.append("rc", { type: "ObjectCreated", id: "rc", objectType: "ticket" }, { idempotencyKey: "k" }),
+    ]);
+
+    expect(r1.eventId).toBe(r2.eventId);
+    expect(await mark.read("rc")).toHaveLength(1);
   });
 
   it("readCorrelation finds a pre-lineage row whose correlation_id is NULL (read as its own id)", async () => {

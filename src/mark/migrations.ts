@@ -112,8 +112,10 @@ const m0003_event_lineage: Migration = {
 
 /**
  * Migration 4 — idempotency keys (ADR-0007). A nullable column with a partial
- * unique index: many events have no key, but any key that is present is unique
- * across the Mark, so a retried append deduplicates rather than double-writes.
+ * unique index scoped to the object: many events have no key, but any key that
+ * is present is unique *per object*, so a retried append to that object
+ * deduplicates rather than double-writes, while the same key on a different
+ * object is a distinct operation (and composes with future per-tenant scoping).
  */
 const m0004_idempotency_key: Migration = {
   version: 4,
@@ -122,7 +124,7 @@ const m0004_idempotency_key: Migration = {
     await client.query(`
       ALTER TABLE ${MARK_EVENTS_TABLE} ADD COLUMN idempotency_key TEXT;
       CREATE UNIQUE INDEX ${MARK_EVENTS_TABLE}_idempotency_key_uidx
-        ON ${MARK_EVENTS_TABLE} (idempotency_key)
+        ON ${MARK_EVENTS_TABLE} (object_id, idempotency_key)
         WHERE idempotency_key IS NOT NULL;
     `);
   },
@@ -146,6 +148,10 @@ export const MIGRATIONS: readonly Migration[] = [
 export async function migrate(pool: Pool): Promise<void> {
   const client = await pool.connect();
   try {
+    // Session-scoped lock: serialises concurrent runs. If the process is killed
+    // mid-run the lock releases only when the backend session is reaped, so
+    // other instances may block briefly — acceptable, and the `applied` set
+    // makes re-running safe regardless.
     await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_KEY]);
 
     await client.query(`

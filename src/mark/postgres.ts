@@ -106,9 +106,9 @@ export class PostgresMark implements Mark {
       throw new Error(`ObjectCreated.id "${event.id}" must match the log key "${objectId}"`);
     }
 
-    // Idempotent retry: a key already recorded returns the original event.
+    // Fast path: a key already recorded for this object returns the original.
     if (options.idempotencyKey !== undefined) {
-      const seen = await this.#findByIdempotencyKey(options.idempotencyKey);
+      const seen = await this.#findByKey(this.pool, objectId, options.idempotencyKey);
       if (seen !== null) return seen;
     }
 
@@ -124,11 +124,27 @@ export class PostgresMark implements Mark {
         [objectId],
       );
 
+      // Authoritative idempotency check, inside the lock: a concurrent retry to
+      // the same object that lost the race sees the winner's event here and
+      // returns it, rather than failing the projection validation below.
+      if (options.idempotencyKey !== undefined) {
+        const seen = await this.#findByKey(client, objectId, options.idempotencyKey);
+        if (seen !== null) {
+          await client.query("COMMIT");
+          return seen;
+        }
+      }
+
       const current = await this.#loadWithin(client, objectId);
       const currentVersion = current?.version ?? 0;
 
       if (options.expectedVersion !== undefined && options.expectedVersion !== currentVersion) {
-        throw new ConcurrencyError(objectId, options.expectedVersion, currentVersion);
+        throw new ConcurrencyError(
+          objectId,
+          `expected version ${options.expectedVersion}, found ${currentVersion}`,
+          options.expectedVersion,
+          currentVersion,
+        );
       }
 
       // Throws if the event is illegal for the object's current state.
@@ -165,14 +181,14 @@ export class PostgresMark implements Mark {
       await client.query("ROLLBACK");
       if (isUniqueViolation(error)) {
         // Decide by data, not by constraint name (which the pg driver does not
-        // populate reliably for partial indexes). If our key is now present, a
-        // concurrent append with the same idempotency key won the race — return
-        // its event. Otherwise it was the UNIQUE(object_id, seq) backstop.
+        // populate reliably for partial indexes). A backstop for the narrow
+        // window the in-lock recheck doesn't cover: if our (object, key) is now
+        // present, a concurrent retry won — return its event.
         if (options.idempotencyKey !== undefined) {
-          const seen = await this.#findByIdempotencyKey(options.idempotencyKey);
+          const seen = await this.#findByKey(this.pool, objectId, options.idempotencyKey);
           if (seen !== null) return seen;
         }
-        throw new ConcurrencyError(objectId, options.expectedVersion ?? -1, -1);
+        throw new ConcurrencyError(objectId, "a concurrent write advanced the object");
       }
       throw error;
     } finally {
@@ -180,10 +196,15 @@ export class PostgresMark implements Mark {
     }
   }
 
-  async #findByIdempotencyKey(key: string): Promise<RecordedEvent | null> {
-    const { rows } = await this.pool.query<EventRow>(
-      `SELECT ${EVENT_COLUMNS} FROM ${MARK_EVENTS_TABLE} WHERE idempotency_key = $1`,
-      [key],
+  /** Find the event recorded for an (object, idempotency key), or null. */
+  async #findByKey(
+    executor: Pool | PoolClient,
+    objectId: string,
+    key: string,
+  ): Promise<RecordedEvent | null> {
+    const { rows } = await executor.query<EventRow>(
+      `SELECT ${EVENT_COLUMNS} FROM ${MARK_EVENTS_TABLE} WHERE object_id = $1 AND idempotency_key = $2`,
+      [objectId, key],
     );
     return rows.length === 0 ? null : toRecorded(rows[0]!);
   }
