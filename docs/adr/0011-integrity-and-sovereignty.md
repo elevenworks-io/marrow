@@ -1,6 +1,6 @@
 # ADR-0011: Integrity and sovereignty — hash-chain, crypto-shredding, sovereign inference (cross-cutting)
 
-- **Status:** Accepted
+- **Status:** Accepted (provisional — revisit after the ADR-0006 vertical slice)
 - **Date:** 2026-06-15
 - **Decision owner:** elevenworks / MARROW
 - **Depends on:** ADR-0001 (append-only), ADR-0002 (sovereign stack)

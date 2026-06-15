@@ -1,6 +1,6 @@
 # ADR-0007: Durable execution on the Mark (Layer 3a)
 
-- **Status:** Accepted
+- **Status:** Accepted (provisional — revisit after the ADR-0006 vertical slice)
 - **Date:** 2026-06-15
 - **Decision owner:** elevenworks / MARROW
 - **Depends on:** ADR-0001 (the Mark is the durable-execution journal), ADR-0002 (organ boundary contract), ADR-0003 (event versioning)

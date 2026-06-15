@@ -1,6 +1,6 @@
 # ADR-0009: Time Machine and audit — as-of replay first, branching deferred (Layer 4)
 
-- **Status:** Accepted
+- **Status:** Accepted (provisional — revisit after the ADR-0006 vertical slice)
 - **Date:** 2026-06-15
 - **Decision owner:** elevenworks / MARROW
 - **Depends on:** ADR-0001 (replay), ADR-0003 (old events stay readable via upcasting), ADR-0004 (sandbox projection), ADR-0007 (the execution/replay boundary)

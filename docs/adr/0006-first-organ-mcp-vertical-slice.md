@@ -48,3 +48,5 @@ The right move is a **thin vertical slice through an organ**: top (an external c
 ## Notes
 
 Realizes the **cross-cutting vertical slice** in the Mark capability map. Sequenced after Layer 1 (ADR-0003) and a minimal Layer 2 (ADR-0004); the schema it uses starts minimal (objectType as a string, open attributes) and is hardened later by schema-morph (ADR-0005).
+
+**Snapshots may be pulled forward here.** `read`/`load`/`readCorrelation` are currently unbounded, and a dogfooding agent is exactly what produces the first *long* object — so the snapshot cliff (a capability-map deferral) can bite during this slice rather than abstractly "at Layer 2/3." Set a `statement_timeout` on the Pool from the start of the slice, and expect to introduce snapshots earlier than the layer numbering suggests if a long object appears.

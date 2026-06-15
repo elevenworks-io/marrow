@@ -1,6 +1,6 @@
 # ADR-0008: Memory and retrieval as a rebuildable projection (Layer 3b)
 
-- **Status:** Accepted
+- **Status:** Accepted (provisional — revisit after the ADR-0006 vertical slice)
 - **Date:** 2026-06-15
 - **Decision owner:** elevenworks / MARROW
 - **Depends on:** ADR-0001 (events are truth), ADR-0004 (projection framework)

@@ -92,10 +92,13 @@ defer at the kernel stage; recorded here so they surface on purpose when their
 layer arrives, not as a late surprise.
 
 - **Snapshots.** `load` and `append` fold an object's whole history every time
-  (append re-folds to compute the next version). At ~10k events per object this
-  is the classic event-sourcing cliff. ADR-0001 anticipates snapshots as a
-  *cache* derived from events; introduce them when the pain is real (around
-  Layer 2/3), never before — and never as a second source of truth.
+  (append re-folds to compute the next version); `read`/`readCorrelation` are
+  unbounded. At ~10k events per object this is the classic event-sourcing cliff.
+  ADR-0001 anticipates snapshots as a *cache* derived from events; introduce them
+  when the pain is real, never before — and never as a second source of truth.
+  **Expect this earlier than "Layer 2/3":** the ADR-0006 vertical slice is where
+  a dogfooding agent first produces a *long* object. Set a `statement_timeout`
+  on the Pool from the slice onward.
 - **Numbered migrations.** A single idempotent `migrate()` is enough today. An
   evolving schema needs ordered, versioned migrations — lands with Layer 1
   (event versioning) or the first schema change, whichever comes first.
@@ -107,7 +110,13 @@ layer arrives, not as a late surprise.
 ## Decisions taken (ADRs)
 
 The direction for the layers above is now recorded. Implementation follows the
-sequence; the decisions are settled.
+sequence.
+
+> **Provisional from Layer 3 on.** ADR-0007–0011 are marked *Accepted
+> (provisional)*: locked as direction, but no organ has yet put them under
+> pressure. The first organ — the ADR-0006 vertical slice — is the reality
+> check, and it is expected to correct some of these. We hold the theory loosely
+> until the slice tests it; ADR-0001–0006 are firm.
 
 | Layer / concern | ADR | Decision in one line |
 |---|---|---|
