@@ -7,7 +7,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL_v3-blue.svg" alt="License: AGPL v3"></a>
   <a href="https://cla-assistant.io/elevenworks-io/marrow"><img src="https://cla-assistant.io/readme/badge/elevenworks-io/marrow" alt="CLA assistant"></a>
-  <a href="#status"><img src="https://img.shields.io/badge/status-foundational-orange.svg" alt="Status: Foundational"></a>
+  <a href="#status"><img src="https://img.shields.io/badge/status-spine%20%2B%20first%20organ-blue.svg" alt="Status: Spine + first organ"></a>
   <a href="#what-makes-it-different"><img src="https://img.shields.io/badge/sovereign-EU%20%2F%20self--hostable-003399.svg" alt="Sovereign: EU / self-hostable"></a>
   <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome"></a>
   <a href="https://www.conventionalcommits.org"><img src="https://img.shields.io/badge/Conventional_Commits-1.0.0-yellow.svg" alt="Conventional Commits"></a>
@@ -35,7 +35,32 @@ The architecture that makes all of this possible is a single decision: **an appe
 
 ## Status
 
-**Foundational.** This repository is at the very beginning — we're laying the spine before the organs. Expect the substrate (the event-sourced core) and decision records first; capabilities grow on top of it over the coming months. Built in the open, with the reasoning published as we go.
+**The spine is laid, and the first organ is attached.** What's real today:
+
+- **The Mark** — the append-only, event-sourced substrate. Typed immutable events; one projection folded from them; `replay`; in-memory **and** PostgreSQL adapters. Plus event versioning (upcasting on read), causal lineage, and per-object idempotency. The whole point — *state is nothing but a fold of the log* — is proven by `load == replay(read)` on both adapters, and the database itself refuses to rewrite history.
+- **The first organ** — the Mark exposed over **MCP**, so any assistant can create, mutate, read, and inspect the full glass-box history of objects. The substrate, drivable from a chat.
+
+Decisions and their reasoning are published as ADRs as we go; the roadmap and what's still open live in the capability map. Built in the open.
+
+### See it / run it
+
+```bash
+npm install
+npm run db:up        # disposable PostgreSQL 17 (Docker)
+npm test             # the full suite, both adapters
+npm run tour         # a guided, visual proof the substrate works
+npm run mcp:demo     # watch an agent drive the Mark over real MCP
+```
+
+### Layout
+
+| Path | What |
+|---|---|
+| `src/mark/` | the Spine — the Mark (events, projection, log, Postgres, migrations, versioning) |
+| `src/organs/mcp/` | the first organ — the Mark exposed over MCP |
+| `examples/` | runnable demos (`mark-tour.ts`, `mcp-demo.ts`) |
+| `docs/adr/` | the decision log |
+| `docs/mark-capability-map.md` | the roadmap: capabilities, status, deferrals, findings |
 
 ## Follow along
 
@@ -49,6 +74,7 @@ The architecture that makes all of this possible is a single decision: **an appe
 |---|---|
 | [`VISION.md`](VISION.md) | The permanent target. The finished organism, described as if it already exists — including how it *feels* to use. Read this first. |
 | [`docs/adr/`](docs/adr/) | The decision log. Time-bound architectural choices and their reasoning. |
+| [`docs/mark-capability-map.md`](docs/mark-capability-map.md) | The roadmap: what the Mark must become, what's built, what's deferred, and what real use has taught. |
 | [`CLAUDE.md`](CLAUDE.md) | Operating context for AI coding agents working in this repo. |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | How to get involved and how decisions are made. |
 
