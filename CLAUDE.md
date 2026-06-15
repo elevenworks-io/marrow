@@ -25,29 +25,37 @@ MARROW is built on **the Mark**: an append-only event log that is the single sou
 
 ## Current state
 
-**Foundational.** The first thing to build is the **Spine kernel**, nothing more:
+The **Spine kernel** and **Layer 1** are built, and the **first organ** (the Mark over MCP) is live. The substrate is real, tested, and dogfoodable — not a sketch.
 
-1. A typed, immutable `Event`.
-1. An append-only log keyed by object id with a monotonic sequence.
-1. **One** projection that folds events into current object state.
-1. A `replay` that reconstructs an object’s state purely from its events.
+- **The Mark** — `src/mark/`. Typed immutable events; an append-only log keyed by object id with a monotonic sequence (in-memory **and** PostgreSQL adapters); **one** projection + `replay`. Plus Layer 1: numbered migrations, event versioning with upcasting-on-read (ADR-0003), causal lineage — eventId / correlation / causation + `readCorrelation` (ADR-0009), and per-object idempotency (ADR-0007). `load == replay(read)` is proven on both adapters.
+- **The first organ** — `src/organs/mcp/`. The Mark exposed over MCP (7 tools), runnable via `npm run mcp`, drivable from any assistant (ADR-0006).
+- **What's decided vs. still open** lives in [`docs/mark-capability-map.md`](docs/mark-capability-map.md). ADR-0001–0006 are firm; **ADR-0007–0011 (Layer 3+) are *provisional*** — held loosely until the organs put them under real pressure. The map also records findings from actual use.
 
-A handful of event types is enough to prove the kernel (e.g. `ObjectCreated`, `AttributeSet`, `StateChanged`, `NoteAdded`). The kernel is correct when you can create an object *only* through events and recompute its state by replaying them. Build the spine before any organ.
+Run the suite with `npm test` (Postgres via `npm run db:up`); watch the substrate prove itself with `npm run tour`. When deciding what to build next, start from the capability map — don't assume the next layer down; the highest-value next move is a judgement, not a default.
 
 ## How we work
 
-- **Decisions live in ADRs** under `docs/adr/`, numbered and dated. Architectural choices get recorded, not buried in code. ADR-0001 (event-sourced substrate) is accepted and is the founding decision.
-- **The stack itself is an open decision — ADR-0002.** Language, runtime, datastore, and core dependencies are *not* yet chosen. Propose them in ADR-0002 with reasoning before scaffolding heavily. Choose deliberately; don’t inherit defaults by accident.
-- **Small, verifiable steps.** Especially for the kernel: prove the projection/replay with tests before building upward.
+This rhythm produced the foundation; hold to it — it is the standard, not a suggestion.
+
+- **Decisions live in ADRs** under `docs/adr/`, numbered and dated, each in the same honest *context / decision / consequences / alternatives* form. ADR-0001 (event-sourced substrate) and ADR-0002 (stack: TypeScript on Node + PostgreSQL) are the founding decisions.
+- **Test-driven, in small verifiable steps.** Write the failing test, watch it fail, make it pass — then harden. Prove `event → projection → replay` before building upward. Every new behaviour has a test.
+- **Both adapters in parity.** The Mark has an in-memory adapter (fast tests) and a PostgreSQL adapter (the real store); they implement the same contract and are tested identically. `load == replay(read)` must hold on both.
+- **Review, then harden.** After a meaningful chunk, run an independent code review *and* a security pass; fix findings **at the right layer**, not the convenient one. Record deliberate deferrals openly (the capability map's "Known deferrals"), never silently.
+- **Honest scope; let reality correct the theory.** Lock direction early in ADRs, but mark forward-looking ones *provisional* and let the first organ / real use correct them. The vertical slice is a reality check — let it be one. Don't defend an elegant theory; don't drift scope to feel thorough.
+- **Branch → PR → merge → clean.** Never pile work on `main`; one logical change per PR, delete the branch after merge, keep `main` in sync and green.
+- **Reproducible and shown.** `npm run db:up`, `npm test`, `npm run tour`, `npm run mcp:demo` — the build proves itself on a fresh clone, and demos make it *visible*.
 - **Commits** are conventional and scoped (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`). Sign off per `CONTRIBUTING.md`.
-- When in doubt about *what* something should do or feel like, the answer is in `VISION.md`. When in doubt about *how* we decide, it’s an ADR.
+- When in doubt about *what* something should do or feel like, the answer is in `VISION.md`. When in doubt about *how* we decide, it’s an ADR. When in doubt about *where we are*, it’s the capability map.
 
 ## Where things live
 
 - `VISION.md` — the target (what / why / the feeling).
-- `docs/adr/` — decisions over time.
+- `docs/adr/` — decisions over time (ADR-0001…0011).
+- `docs/mark-capability-map.md` — the roadmap artifact: capabilities vs. status, the layer stack, known deferrals, and findings from real use. *Where we are.*
 - `CLAUDE.md` — this file (how to behave here).
-- Code structure is intended to mirror the organism (a clear home for the spine/Mark, and organs attached to it), but the concrete layout follows the stack decision in ADR-0002 — realize it cleanly there rather than guessing now.
+- `src/mark/` — the Spine (the Mark): `event`, `projection`, `log` (in-memory adapter), `postgres`, `migrations`, `upcasting`, `event-schema`.
+- `src/organs/` — organs attached to the spine. `src/organs/mcp/` is the first one (the Mark over MCP).
+- `examples/` — runnable demos (`mark-tour.ts`, `mcp-demo.ts`).
 
 ## Definitely don’t
 

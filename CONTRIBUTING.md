@@ -14,7 +14,7 @@ This is an early, foundational project. The most valuable contributions right no
 
 Architectural choices are recorded as **ADRs** in [`docs/adr/`](docs/adr/), numbered and dated. If you want to propose a direction (a stack, a pattern, a boundary), open an issue or a Discussion first, and if it’s adopted, capture it as an ADR. Decisions live in records, not in buried commit messages.
 
-The current open foundational decision is **ADR-0002: the stack** (language, runtime, datastore, core dependencies). It is deliberately unmade — propose it with reasoning rather than assuming defaults.
+The founding decisions are settled — ADR-0001 (the event-sourced substrate) and ADR-0002 (the stack: TypeScript on Node + PostgreSQL). The Spine kernel, Layer 1, and the first organ (the Mark over MCP) are built. What's decided, what's still open, and what real use has taught lives in [`docs/mark-capability-map.md`](docs/mark-capability-map.md) — start there to see where things stand.
 
 ## Workflow
 
