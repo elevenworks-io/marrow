@@ -1,6 +1,6 @@
 # ADR-0010: Confidence-gated autonomy (cross-cutting)
 
-- **Status:** Accepted
+- **Status:** Accepted (provisional — revisit after the ADR-0006 vertical slice)
 - **Date:** 2026-06-15
 - **Decision owner:** elevenworks / MARROW
 - **Depends on:** ADR-0001 (glass-box), ADR-0003 (events), ADR-0007 (the gate sits before outbox dispatch), ADR-0008 (corrections become precedent)
