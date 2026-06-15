@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "marrow-mark": {
+      "command": "npm",
+      "args": ["--silent", "run", "mcp"],
+      "env": {
+        "MARROW_DATABASE_URL": "postgres://postgres:marrow@127.0.0.1:55432/marrow",
+        "MARROW_MCP_ACTOR": "mcp:claude"
+      }
+    }
+  }
+}

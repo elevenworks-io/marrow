@@ -132,16 +132,36 @@ sequence.
 
 ## Status
 
-- **Layer 0 — done.** The Spine kernel: 31 tests (21 unit, 10 Postgres
-  integration); `load == replay(read)` proven on both the in-memory and
-  PostgreSQL adapters. Kernel merged in PR #1; review hardening (type/schema
-  drift guard, audit-envelope validation) in PR #2.
-- **Layer 1 — decided ([ADR-0003](adr/0003-event-versioning.md)), next to build.**
-  Envelope enrichment: correlation/causation ids, idempotency keys, event
-  versioning. Versioning is settled; the id/idempotency details land as the
-  layer is built.
-- **Layers 2 / schema-morph / vertical slice — decided** (ADR-0004 / 0005 /
-  0006), sequenced after Layer 1.
-- **Layers 3a, 3b, 4 and the cross-cutting concerns — decided**
-  (ADR-0007 / 0008 / 0009 / 0010 / 0011). Researched and recorded; implementation
-  follows the layer sequence. Every Mark capability now has a settled direction.
+- **Layer 0 — done.** The Spine kernel: typed immutable events, append-only log,
+  one projection, replay; in-memory + PostgreSQL adapters; `load == replay(read)`
+  proven on both.
+- **Layer 1 — done ([ADR-0003](adr/0003-event-versioning.md)).** Envelope
+  enrichment: numbered migrations, event versioning + upcasting-on-read, causal
+  lineage (eventId / correlation / causation + `readCorrelation`), per-object
+  idempotency. Reviewed (code + security); the deferred items are tracked here.
+- **Vertical slice — done ([ADR-0006](adr/0006-first-organ-mcp-vertical-slice.md)).**
+  The first organ: the Mark exposed over MCP (7 tools), dogfoodable from an
+  assistant; `listObjects` is the first cross-object read model.
+- **Layer 2 / schema-morph — decided** (ADR-0004 / 0005), not yet built.
+- **Layers 3a, 3b, 4 and cross-cutting — *provisional*** (ADR-0007–0011), held
+  loosely pending what the slice and the Cortex reveal.
+
+## Findings from dogfooding (the slice)
+
+What real use teaches — the slice's whole purpose (ADR-0006).
+
+- **Cross-call causal correlation is not threaded.** Driven over separate MCP
+  tool calls, each call becomes its own lineage root (`causationId: null`, its
+  own `correlationId`); only events within a single `create_object` share a
+  correlation. For a *single* object this is fine — `get_history(id)` is the full
+  story. The gap is **cross-object "cases"** (e.g. a complaint that spawns a
+  refund object *and* a task). Deliberately **not** fixed yet: (a) it blocks
+  nothing today — no workflow yet creates such cases; (b) "case" is a substrate /
+  Cortex modelling decision (ADR-0009), not an organ patch; (c) rich causal
+  chains are meaningful when MARROW's *own* agent (the Cortex) acts
+  (perception → decision → action) — an external assistant poking raw tools has
+  no internal "why" to thread, so each call genuinely *is* an independent action.
+  **Open question for the Cortex:** how should a case correlate actions across
+  tools/objects — an explicit `caseId`, a session-scoped "current case", or
+  `causedBy` threading? Decide with several real workflow data points, not this
+  one.

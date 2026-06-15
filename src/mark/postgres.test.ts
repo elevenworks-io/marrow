@@ -119,6 +119,20 @@ describe.skipIf(!url)("PostgresMark", () => {
     ).rejects.toThrow(/append-only/i);
   });
 
+  it("listObjects returns the current state of every object of a type, in creation order", async () => {
+    await mark.append("t1", { type: "ObjectCreated", id: "t1", objectType: "ticket" });
+    await mark.append("i1", { type: "ObjectCreated", id: "i1", objectType: "invoice" });
+    await mark.append("t2", { type: "ObjectCreated", id: "t2", objectType: "ticket" });
+    await mark.append("t1", { type: "StateChanged", state: "open" });
+
+    const tickets = await mark.listObjects("ticket");
+
+    expect(tickets.map((o) => o.id)).toEqual(["t1", "t2"]);
+    expect(tickets[0]!.state).toBe("open");
+    expect(await mark.listObjects("invoice")).toHaveLength(1);
+    expect(await mark.listObjects("nope")).toHaveLength(0);
+  });
+
   it("deduplicates appends that carry the same idempotency key", async () => {
     const first = await mark.append(
       "a",

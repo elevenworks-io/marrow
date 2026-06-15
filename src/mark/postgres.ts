@@ -225,6 +225,23 @@ export class PostgresMark implements Mark {
     return events.length === 0 ? null : replay(events.map((r) => r.event));
   }
 
+  async listObjects(objectType: string): Promise<readonly ObjectState[]> {
+    // Naive read model: find each object's creation event (seq 1), in creation
+    // order, then load it. Unbounded — a paginated projection follows (ADR-0004).
+    const { rows } = await this.pool.query<{ object_id: string }>(
+      `SELECT object_id FROM ${MARK_EVENTS_TABLE}
+        WHERE seq = 1 AND type = 'ObjectCreated' AND payload->>'objectType' = $1
+        ORDER BY global_seq ASC`,
+      [objectType],
+    );
+    const states: ObjectState[] = [];
+    for (const { object_id } of rows) {
+      const state = await this.load(object_id);
+      if (state !== null) states.push(state);
+    }
+    return states;
+  }
+
   // NOTE: read/load/readCorrelation are unbounded — a very large object or case
   // loads every row. Bounded/streamed reads (pagination) land with Layer 2; until
   // then, configure a `statement_timeout` on the injected Pool as a DoS guard.
