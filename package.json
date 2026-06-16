@@ -18,6 +18,7 @@
     "mcp:demo": "tsx examples/mcp-demo.ts",
     "cortex:demo": "tsx examples/cortex-demo.ts",
     "cortex:ab": "tsx examples/cortex-ab.ts",
+    "lens": "tsx examples/lens-trace.ts",
     "db:up": "docker rm -f marrow-pg >/dev/null 2>&1; docker run -d --name marrow-pg -e POSTGRES_PASSWORD=marrow -e POSTGRES_DB=marrow_test -p 55432:5432 postgres:17-alpine && until docker exec marrow-pg pg_isready -U postgres -q 2>/dev/null; do sleep 0.5; done && docker exec marrow-pg psql -U postgres -c \"CREATE DATABASE marrow\"",
     "db:down": "docker rm -f marrow-pg"
   },
